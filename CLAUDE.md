@@ -41,6 +41,6 @@ cargo clippy --workspace
 - Use structurally different patterns (gradient vs checkerboard vs stripes) in tests to ensure distinct perceptual hashes — color-only differences are not enough
 - `tempfile` crate for isolated test directories
 - CLI status tests: extracted testable logic (StatusData, compute_aggregates, etc.) for unit testing without stdout capture
-- Vault save tests cover: date parsing, collision handling, incremental skip, cross-format dedup, progress events, error cases, file content preservation
+- Vault sync tests cover: date parsing, collision handling, incremental skip, cross-format dedup, progress events, error cases, file content preservation
 - Quality preservation tests: all format tier combinations (CR2>JPEG, DNG>JPEG, CR2>HEIC, TIFF>JPEG, PNG>HEIC, JPEG>HEIC), vault as source preserves RAW
 - HEIC export tests: macOS-only tests gated with `#[cfg(target_os = "macos")]`, cross-platform config/error tests run everywhere
