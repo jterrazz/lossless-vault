@@ -8,41 +8,29 @@ use fast_image_resize::{self as fir, images::Image as FirImage};
 /// Both hashes are 8x8 = 64-bit. Matching requires dual-hash consensus (both within threshold).
 ///
 /// Uses a hybrid decode strategy:
-/// - JPEG: `turbojpeg` for ~2-3x faster decode (feature-gated)
-/// - Other formats: `image` crate decode
+/// - JPEG: `turbojpeg` with 1/4 DCT scaling + direct grayscale decode (feature-gated)
+/// - Other formats: `image` crate decode, RGB resize to 9x8, then grayscale conversion
 ///
-/// Both paths resize to 9x8 grayscale via SIMD-accelerated `fast_image_resize`,
-/// then compute aHash + dHash from the same tiny buffer (no `img_hash` dependency).
+/// Both paths produce a 9x8 grayscale buffer for manual aHash + dHash computation.
 pub fn compute_perceptual_hashes(path: &Path) -> Option<(u64, u64)> {
-    let grayscale = load_grayscale(path)?;
-    let (width, height) = (grayscale.width(), grayscale.height());
-
-    // Resize to 9x8 grayscale using SIMD-accelerated resizer
-    // 9 columns needed for dHash (gradient between adjacent pixels → 8 diffs)
-    // 8 rows for both hashes (8x8 = 64 bits)
-    let mut dst = FirImage::new(9, 8, fir::PixelType::U8);
-    let mut resizer = fir::Resizer::new();
-    let src = FirImage::from_vec_u8(width, height, grayscale.into_raw(), fir::PixelType::U8).ok()?;
-    resizer.resize(&src, &mut dst, None).ok()?;
-
-    let pixels = dst.buffer();
-    let ahash = compute_ahash(pixels);
-    let dhash = compute_dhash(pixels);
+    let pixels = load_9x8_grayscale(path)?;
+    let ahash = compute_ahash(&pixels);
+    let dhash = compute_dhash(&pixels);
     Some((ahash, dhash))
 }
 
-/// Load image as grayscale buffer. Tries turbojpeg first for JPEG (faster decode),
-/// then falls back to the `image` crate for all other formats.
-fn load_grayscale(path: &Path) -> Option<image::GrayImage> {
+/// Load image and produce a 9x8 grayscale pixel buffer ready for hashing.
+fn load_9x8_grayscale(path: &Path) -> Option<[u8; 72]> {
+    // JPEG: turbojpeg with DCT scaling → grayscale → resize to 9x8
     #[cfg(feature = "turbojpeg")]
     if is_jpeg(path) {
-        if let Some(img) = load_jpeg_turbojpeg(path) {
-            return Some(img);
+        if let Some(buf) = load_jpeg_9x8(path) {
+            return Some(buf);
         }
     }
 
-    // Fallback: image crate (supports JPEG, PNG, TIFF, WebP)
-    load_image_crate(path)
+    // Other formats: image crate → RGB resize to 9x8 → grayscale
+    load_image_crate_9x8(path)
 }
 
 /// Check if a file is JPEG by extension.
@@ -53,41 +41,90 @@ fn is_jpeg(path: &Path) -> bool {
         .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "jpg" | "jpeg"))
 }
 
-/// Decode JPEG at full resolution using turbojpeg (~2-3x faster than `image` crate).
-/// Decodes to RGB, then converts to grayscale using the same ITU-R BT.601 formula
-/// as the `image` crate (`to_luma8()`) for hash consistency across JPEG and PNG paths.
-///
-/// Note: We deliberately decode at full resolution (no DCT scaling) to preserve
-/// spatial detail needed for distinguishing similar photos (e.g., sequential shots).
-/// The performance gain comes from turbojpeg's optimized JPEG decoder (libjpeg-turbo)
-/// plus SIMD-accelerated resize via `fast_image_resize`.
+/// Minimum scaled dimension for DCT scaling. Must be large enough for
+/// `fast_image_resize` to produce a meaningful 9x8 downsample.
 #[cfg(feature = "turbojpeg")]
-fn load_jpeg_turbojpeg(path: &Path) -> Option<image::GrayImage> {
+const MIN_SCALED_DIM: usize = 32;
+
+/// Decode JPEG using turbojpeg with adaptive DCT scaling directly to grayscale,
+/// then SIMD-resize to 9x8.
+///
+/// Pipeline: turbojpeg 1/4 DCT → GRAY format → fast_image_resize 9x8
+/// For a 12MP photo: 4032x3024 → 1008x756 (DCT) → 9x8 (SIMD resize)
+/// Skips RGB decode and full-resolution grayscale conversion entirely.
+#[cfg(feature = "turbojpeg")]
+fn load_jpeg_9x8(path: &Path) -> Option<[u8; 72]> {
     let jpeg_data = std::fs::read(path).ok()?;
     let mut decompressor = turbojpeg::Decompressor::new().ok()?;
     let header = decompressor.read_header(&jpeg_data).ok()?;
 
-    // Decompress to RGB at full resolution
-    let w = header.width;
-    let h = header.height;
-    let mut buf = vec![0u8; w * h * 3];
+    // Adaptive DCT scaling: pick fastest factor keeping dims >= MIN_SCALED_DIM
+    let scale = best_scaling_factor(header.width, header.height);
+    decompressor.set_scaling_factor(scale).ok()?;
+    let w = scale.scale(header.width);
+    let h = scale.scale(header.height);
+
+    // Decode directly to grayscale (skips chroma, 1 byte/pixel)
+    let mut buf = vec![0u8; w * h];
     let output = turbojpeg::Image {
         pixels: buf.as_mut_slice(),
         width: w,
-        pitch: w * 3,
+        pitch: w,
         height: h,
-        format: turbojpeg::PixelFormat::RGB,
+        format: turbojpeg::PixelFormat::GRAY,
     };
     decompressor.decompress(&jpeg_data, output).ok()?;
 
-    let rgb = image::RgbImage::from_raw(w as u32, h as u32, buf)?;
-    Some(image::DynamicImage::ImageRgb8(rgb).to_luma8())
+    // SIMD resize grayscale to 9x8
+    let src = FirImage::from_vec_u8(w as u32, h as u32, buf, fir::PixelType::U8).ok()?;
+    let mut dst = FirImage::new(9, 8, fir::PixelType::U8);
+    fir::Resizer::new().resize(&src, &mut dst, None).ok()?;
+
+    let mut pixels = [0u8; 72];
+    pixels.copy_from_slice(&dst.buffer()[..72]);
+    Some(pixels)
 }
 
-/// Decode any supported format using the `image` crate, convert to grayscale.
-fn load_image_crate(path: &Path) -> Option<image::GrayImage> {
+/// Choose the most aggressive DCT scaling factor that keeps both
+/// output dimensions at or above MIN_SCALED_DIM.
+#[cfg(feature = "turbojpeg")]
+fn best_scaling_factor(width: usize, height: usize) -> turbojpeg::ScalingFactor {
+    let candidates = [
+        turbojpeg::ScalingFactor::ONE_QUARTER,
+        turbojpeg::ScalingFactor::ONE_HALF,
+        turbojpeg::ScalingFactor::ONE,
+    ];
+    for sf in candidates {
+        if sf.scale(width) >= MIN_SCALED_DIM && sf.scale(height) >= MIN_SCALED_DIM {
+            return sf;
+        }
+    }
+    turbojpeg::ScalingFactor::ONE
+}
+
+/// Decode any supported format using the `image` crate, resize RGB to 9x8,
+/// then convert only those 72 pixels to grayscale.
+/// Avoids full-resolution grayscale conversion (e.g., 12MP × BT.601 per pixel).
+fn load_image_crate_9x8(path: &Path) -> Option<[u8; 72]> {
     let img = image::open(path).ok()?;
-    Some(img.to_luma8())
+    let rgb = img.to_rgb8();
+    let (w, h) = (rgb.width(), rgb.height());
+
+    // SIMD resize RGB to 9x8 (216 bytes output instead of millions)
+    let src = FirImage::from_vec_u8(w, h, rgb.into_raw(), fir::PixelType::U8x3).ok()?;
+    let mut dst = FirImage::new(9, 8, fir::PixelType::U8x3);
+    fir::Resizer::new().resize(&src, &mut dst, None).ok()?;
+
+    // Convert 72 RGB pixels to grayscale using BT.601
+    let rgb_buf = dst.buffer();
+    let mut gray = [0u8; 72];
+    for i in 0..72 {
+        let r = rgb_buf[i * 3] as f32;
+        let g = rgb_buf[i * 3 + 1] as f32;
+        let b = rgb_buf[i * 3 + 2] as f32;
+        gray[i] = (0.299 * r + 0.587 * g + 0.114 * b) as u8;
+    }
+    Some(gray)
 }
 
 /// Compute average hash (aHash) from 9x8 grayscale pixels.
