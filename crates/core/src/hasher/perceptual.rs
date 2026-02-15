@@ -8,10 +8,12 @@ use fast_image_resize::{self as fir, images::Image as FirImage};
 /// Both hashes are 8x8 = 64-bit. Matching requires dual-hash consensus (both within threshold).
 ///
 /// Uses a hybrid decode strategy:
-/// - JPEG: `turbojpeg` with 1/4 DCT scaling + direct grayscale decode (feature-gated)
+/// - JPEG: `turbojpeg` full-resolution grayscale decode (feature-gated, skips chroma)
 /// - Other formats: `image` crate decode, RGB resize to 9x8, then grayscale conversion
 ///
 /// Both paths produce a 9x8 grayscale buffer for manual aHash + dHash computation.
+/// Full-resolution decode is critical — DCT scaling changes frequency-domain coefficients
+/// differently for recompressed JPEGs, causing hash divergence beyond threshold.
 pub fn compute_perceptual_hashes(path: &Path) -> Option<(u64, u64)> {
     let pixels = load_9x8_grayscale(path)?;
     let ahash = compute_ahash(&pixels);
@@ -21,7 +23,7 @@ pub fn compute_perceptual_hashes(path: &Path) -> Option<(u64, u64)> {
 
 /// Load image and produce a 9x8 grayscale pixel buffer ready for hashing.
 fn load_9x8_grayscale(path: &Path) -> Option<[u8; 72]> {
-    // JPEG: turbojpeg with DCT scaling → grayscale → resize to 9x8
+    // JPEG: turbojpeg full-res grayscale → resize to 9x8
     #[cfg(feature = "turbojpeg")]
     if is_jpeg(path) {
         if let Some(buf) = load_jpeg_9x8(path) {
@@ -41,30 +43,22 @@ fn is_jpeg(path: &Path) -> bool {
         .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "jpg" | "jpeg"))
 }
 
-/// Minimum scaled dimension for DCT scaling. Must be large enough for
-/// `fast_image_resize` to produce a meaningful 9x8 downsample.
-#[cfg(feature = "turbojpeg")]
-const MIN_SCALED_DIM: usize = 32;
-
-/// Decode JPEG using turbojpeg with adaptive DCT scaling directly to grayscale,
+/// Decode JPEG at full resolution directly to grayscale using turbojpeg,
 /// then SIMD-resize to 9x8.
 ///
-/// Pipeline: turbojpeg 1/4 DCT → GRAY format → fast_image_resize 9x8
-/// For a 12MP photo: 4032x3024 → 1008x756 (DCT) → 9x8 (SIMD resize)
-/// Skips RGB decode and full-resolution grayscale conversion entirely.
+/// Pipeline: turbojpeg GRAY format (full res) → fast_image_resize 9x8
+/// Skips chroma decode entirely (1 byte/pixel instead of 3).
+/// Full-resolution decode is required — DCT scaling produces different
+/// intermediate pixels for recompressed JPEGs, causing hash divergence.
 #[cfg(feature = "turbojpeg")]
 fn load_jpeg_9x8(path: &Path) -> Option<[u8; 72]> {
     let jpeg_data = std::fs::read(path).ok()?;
     let mut decompressor = turbojpeg::Decompressor::new().ok()?;
     let header = decompressor.read_header(&jpeg_data).ok()?;
+    let w = header.width;
+    let h = header.height;
 
-    // Adaptive DCT scaling: pick fastest factor keeping dims >= MIN_SCALED_DIM
-    let scale = best_scaling_factor(header.width, header.height);
-    decompressor.set_scaling_factor(scale).ok()?;
-    let w = scale.scale(header.width);
-    let h = scale.scale(header.height);
-
-    // Decode directly to grayscale (skips chroma, 1 byte/pixel)
+    // Decode directly to grayscale at full resolution (skips chroma, 1 byte/pixel)
     let mut buf = vec![0u8; w * h];
     let output = turbojpeg::Image {
         pixels: buf.as_mut_slice(),
@@ -83,23 +77,6 @@ fn load_jpeg_9x8(path: &Path) -> Option<[u8; 72]> {
     let mut pixels = [0u8; 72];
     pixels.copy_from_slice(&dst.buffer()[..72]);
     Some(pixels)
-}
-
-/// Choose the most aggressive DCT scaling factor that keeps both
-/// output dimensions at or above MIN_SCALED_DIM.
-#[cfg(feature = "turbojpeg")]
-fn best_scaling_factor(width: usize, height: usize) -> turbojpeg::ScalingFactor {
-    let candidates = [
-        turbojpeg::ScalingFactor::ONE_QUARTER,
-        turbojpeg::ScalingFactor::ONE_HALF,
-        turbojpeg::ScalingFactor::ONE,
-    ];
-    for sf in candidates {
-        if sf.scale(width) >= MIN_SCALED_DIM && sf.scale(height) >= MIN_SCALED_DIM {
-            return sf;
-        }
-    }
-    turbojpeg::ScalingFactor::ONE
 }
 
 /// Decode any supported format using the `image` crate, resize RGB to 9x8,
