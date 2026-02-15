@@ -3533,3 +3533,204 @@ fn test_export_multiple_groups_correct_count() {
     // 1 SOT from group1 + 1 SOT from group2 + 2 unique = 4
     assert_eq!(count_files_recursive(&export_dir), 4);
 }
+
+// ── Phash version tracking / cache invalidation ─────────────────
+
+#[test]
+fn test_scan_sets_phash_on_jpeg_photos() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("photos");
+    fs::create_dir_all(&dir).unwrap();
+
+    create_jpeg(&dir.join("a.jpg"), 100, 50, 200);
+    create_jpeg(&dir.join("b.png"), 50, 150, 100);
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&dir).unwrap();
+    vault.scan(None).unwrap();
+
+    let photos = vault.photos().unwrap();
+    let jpeg = photos.iter().find(|p| p.path.ends_with("a.jpg")).unwrap();
+    let png = photos.iter().find(|p| p.path.ends_with("b.png")).unwrap();
+    assert!(jpeg.phash.is_some(), "JPEG should have phash after scan");
+    assert!(jpeg.dhash.is_some(), "JPEG should have dhash after scan");
+    assert!(png.phash.is_some(), "PNG should have phash after scan");
+    assert!(png.dhash.is_some(), "PNG should have dhash after scan");
+}
+
+#[test]
+fn test_scan_reuses_cached_hashes_when_version_unchanged() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("photos");
+    fs::create_dir_all(&dir).unwrap();
+
+    create_jpeg(&dir.join("a.jpg"), 100, 50, 200);
+
+    let db_path = tmp.path().join("catalog.db");
+    let mut vault = Vault::open(&db_path).unwrap();
+    vault.add_source(&dir).unwrap();
+    vault.scan(None).unwrap();
+
+    // Record original hashes
+    let photos = vault.photos().unwrap();
+    let original_phash = photos[0].phash.unwrap();
+    let original_dhash = photos[0].dhash.unwrap();
+
+    // Rescan — hashes should be reused (not recomputed)
+    vault.scan(None).unwrap();
+
+    let photos = vault.photos().unwrap();
+    assert_eq!(photos[0].phash.unwrap(), original_phash);
+    assert_eq!(photos[0].dhash.unwrap(), original_dhash);
+}
+
+#[test]
+fn test_scan_invalidates_hashes_on_version_change() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("photos");
+    fs::create_dir_all(&dir).unwrap();
+
+    create_jpeg(&dir.join("a.jpg"), 100, 50, 200);
+
+    let db_path = tmp.path().join("catalog.db");
+    let mut vault = Vault::open(&db_path).unwrap();
+    vault.add_source(&dir).unwrap();
+    vault.scan(None).unwrap();
+
+    // Verify photo has phash
+    let photos = vault.photos().unwrap();
+    assert!(photos[0].phash.is_some());
+
+    // Simulate an old phash_version by writing a different value directly
+    {
+        let catalog = losslessvault_core::catalog::Catalog::open(&db_path).unwrap();
+        catalog.set_config("phash_version", "OLD_VERSION").unwrap();
+    }
+
+    // Rescan — should detect version mismatch, clear hashes, recompute
+    let mut vault = Vault::open(&db_path).unwrap();
+    vault.scan(None).unwrap();
+
+    let photos = vault.photos().unwrap();
+    assert!(photos[0].phash.is_some(), "phash should be recomputed after version change");
+    assert!(photos[0].dhash.is_some(), "dhash should be recomputed after version change");
+}
+
+#[test]
+fn test_scan_invalidates_stale_hashes_and_regroups_duplicates() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("photos");
+    fs::create_dir_all(&dir).unwrap();
+
+    // Create original at high quality and recompressed at low quality
+    let img = image::RgbImage::from_fn(64, 64, |x, y| {
+        image::Rgb([
+            100u8.wrapping_add((x * 3) as u8),
+            100u8.wrapping_add((y * 3) as u8),
+            100u8.wrapping_add(((x + y) * 2) as u8),
+        ])
+    });
+    {
+        let file = fs::File::create(dir.join("original.jpg")).unwrap();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(file, 95);
+        encoder
+            .encode(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::Rgb8)
+            .unwrap();
+    }
+    {
+        let file = fs::File::create(dir.join("recompressed.jpg")).unwrap();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(file, 50);
+        encoder
+            .encode(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::Rgb8)
+            .unwrap();
+    }
+
+    let db_path = tmp.path().join("catalog.db");
+    let mut vault = Vault::open(&db_path).unwrap();
+    vault.add_source(&dir).unwrap();
+    vault.scan(None).unwrap();
+
+    // Should be grouped (same image, different compression)
+    assert_eq!(vault.groups().unwrap().len(), 1, "initial scan should group recompressed pair");
+
+    // Poison hashes: set a stale version so next scan invalidates
+    {
+        let catalog = losslessvault_core::catalog::Catalog::open(&db_path).unwrap();
+        catalog.set_config("phash_version", "STALE").unwrap();
+        // Corrupt the cached hashes to simulate algorithm change
+        catalog.clear_perceptual_hashes().unwrap();
+    }
+
+    // Rescan — should detect version mismatch, recompute hashes, and regroup
+    let mut vault = Vault::open(&db_path).unwrap();
+    vault.scan(None).unwrap();
+
+    assert_eq!(
+        vault.groups().unwrap().len(),
+        1,
+        "recompressed pair should still be grouped after hash recomputation"
+    );
+}
+
+#[test]
+fn test_scan_first_run_sets_phash_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("photos");
+    fs::create_dir_all(&dir).unwrap();
+    create_jpeg(&dir.join("a.jpg"), 100, 50, 200);
+
+    let db_path = tmp.path().join("catalog.db");
+    let mut vault = Vault::open(&db_path).unwrap();
+    vault.add_source(&dir).unwrap();
+
+    // Before scan, no phash_version in config
+    {
+        let catalog = losslessvault_core::catalog::Catalog::open(&db_path).unwrap();
+        assert!(catalog.get_config("phash_version").unwrap().is_none());
+    }
+
+    vault.scan(None).unwrap();
+
+    // After scan, phash_version should be set
+    {
+        let catalog = losslessvault_core::catalog::Catalog::open(&db_path).unwrap();
+        let version = catalog.get_config("phash_version").unwrap();
+        assert!(version.is_some(), "scan should set phash_version in config");
+    }
+}
+
+#[test]
+fn test_scan_version_mismatch_clears_all_hashes_before_recompute() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("photos");
+    fs::create_dir_all(&dir).unwrap();
+
+    create_jpeg(&dir.join("a.jpg"), 100, 50, 200);
+    create_jpeg(&dir.join("b.jpg"), 50, 150, 100);
+
+    let db_path = tmp.path().join("catalog.db");
+    let mut vault = Vault::open(&db_path).unwrap();
+    vault.add_source(&dir).unwrap();
+    vault.scan(None).unwrap();
+
+    // Both photos should have hashes
+    let photos = vault.photos().unwrap();
+    assert!(photos.iter().all(|p| p.phash.is_some()));
+
+    // Simulate old version
+    {
+        let catalog = losslessvault_core::catalog::Catalog::open(&db_path).unwrap();
+        catalog.set_config("phash_version", "1").unwrap();
+    }
+
+    // Rescan — version mismatch triggers clear + recompute
+    let mut vault = Vault::open(&db_path).unwrap();
+    vault.scan(None).unwrap();
+
+    // All photos should have fresh hashes (recomputed, not stale)
+    let photos = vault.photos().unwrap();
+    assert!(
+        photos.iter().all(|p| p.phash.is_some() && p.dhash.is_some()),
+        "all photos should have recomputed hashes after version change"
+    );
+}

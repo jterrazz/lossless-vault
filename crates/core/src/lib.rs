@@ -75,10 +75,12 @@ impl Vault {
     const PHASH_VERSION: &str = "3";
 
     pub fn scan(&mut self, mut progress_cb: Option<&mut dyn FnMut(ScanProgress)>) -> Result<()> {
-        // Invalidate cached hashes if algorithm version changed
+        // Invalidate cached hashes if algorithm version changed.
+        // Also reset mtimes so skipped files get re-fingerprinted and re-hashed.
         let stored_version = self.catalog.get_config("phash_version")?;
         if stored_version.as_deref() != Some(Self::PHASH_VERSION) {
             self.catalog.clear_perceptual_hashes()?;
+            self.catalog.reset_all_mtimes()?;
             self.catalog
                 .set_config("phash_version", Self::PHASH_VERSION)?;
         }

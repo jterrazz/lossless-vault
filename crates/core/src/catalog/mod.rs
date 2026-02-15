@@ -758,6 +758,12 @@ impl Catalog {
         Ok(count)
     }
 
+    /// Reset all mtime values to 0, forcing every file to be re-processed on next scan.
+    pub fn reset_all_mtimes(&self) -> Result<usize> {
+        let count = self.conn.execute("UPDATE photos SET mtime = 0", [])?;
+        Ok(count)
+    }
+
     pub fn get_config(&self, key: &str) -> Result<Option<String>> {
         let value = self
             .conn
@@ -1143,5 +1149,78 @@ mod tests {
             catalog.get_config("vault_path").unwrap(),
             Some("/new".to_string())
         );
+    }
+
+    // ── Clear perceptual hashes ─────────────────────────────────
+
+    #[test]
+    fn test_clear_perceptual_hashes_nullifies_values() {
+        let (catalog, source, _tmp) = make_catalog_with_source();
+        let mut photo = make_photo(source.id, "/tmp/a.jpg", "aaa");
+        photo.phash = Some(12345);
+        photo.dhash = Some(67890);
+        catalog.upsert_photo(&photo).unwrap();
+
+        let before = catalog.list_all_photos().unwrap();
+        assert!(before[0].phash.is_some());
+        assert!(before[0].dhash.is_some());
+
+        let count = catalog.clear_perceptual_hashes().unwrap();
+        assert_eq!(count, 1);
+
+        let after = catalog.list_all_photos().unwrap();
+        assert!(after[0].phash.is_none());
+        assert!(after[0].dhash.is_none());
+    }
+
+    #[test]
+    fn test_clear_perceptual_hashes_returns_zero_when_none_set() {
+        let (catalog, source, _tmp) = make_catalog_with_source();
+        let mut photo = make_photo(source.id, "/tmp/a.jpg", "aaa");
+        photo.phash = None;
+        photo.dhash = None;
+        catalog.upsert_photo(&photo).unwrap();
+
+        let count = catalog.clear_perceptual_hashes().unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_clear_perceptual_hashes_only_affects_non_null() {
+        let (catalog, source, _tmp) = make_catalog_with_source();
+
+        let mut with_hash = make_photo(source.id, "/tmp/a.jpg", "aaa");
+        with_hash.phash = Some(111);
+        with_hash.dhash = Some(222);
+        catalog.upsert_photo(&with_hash).unwrap();
+
+        let mut without_hash = make_photo(source.id, "/tmp/b.jpg", "bbb");
+        without_hash.phash = None;
+        without_hash.dhash = None;
+        catalog.upsert_photo(&without_hash).unwrap();
+
+        let count = catalog.clear_perceptual_hashes().unwrap();
+        assert_eq!(count, 1);
+
+        let photos = catalog.list_all_photos().unwrap();
+        assert!(photos.iter().all(|p| p.phash.is_none() && p.dhash.is_none()));
+    }
+
+    #[test]
+    fn test_clear_perceptual_hashes_preserves_other_fields() {
+        let (catalog, source, _tmp) = make_catalog_with_source();
+        let mut photo = make_photo(source.id, "/tmp/a.jpg", "sha_abc");
+        photo.phash = Some(999);
+        photo.dhash = Some(888);
+        photo.size = 5000;
+        catalog.upsert_photo(&photo).unwrap();
+
+        catalog.clear_perceptual_hashes().unwrap();
+
+        let photos = catalog.list_all_photos().unwrap();
+        assert_eq!(photos[0].sha256, "sha_abc");
+        assert_eq!(photos[0].size, 5000);
+        assert_eq!(photos[0].format, PhotoFormat::Jpeg);
+        assert!(photos[0].phash.is_none());
     }
 }
