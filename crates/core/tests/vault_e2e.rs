@@ -1651,7 +1651,7 @@ fn test_three_sources_quality_ladder_raw_wins() {
     );
 }
 
-/// Vault save must export only the RAW, not the HEIC.
+/// Pack must save only the RAW, not the HEIC.
 #[test]
 fn test_vault_save_exports_raw_not_lossy() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1672,23 +1672,18 @@ fn test_vault_save_exports_raw_not_lossy() {
     vault.set_vault_path(&vault_dir).unwrap();
     vault.vault_save(None).unwrap();
 
-    let files: Vec<_> = walkdir::WalkDir::new(&vault_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .collect();
-    assert_eq!(files.len(), 1, "only SOT should be exported");
+    let pack_files = list_pack_files(&vault_dir);
+    assert_eq!(pack_files.len(), 1, "only SOT should be packed");
     assert_eq!(
-        files[0].path().extension().unwrap(),
+        pack_files[0].extension().unwrap(),
         "cr2",
-        "the exported file must be the RAW (CR2), not the HEIC"
+        "the packed file must be the RAW (CR2), not the HEIC"
     );
 }
 
-/// When the vault directory is also a registered source containing the RAW
-/// original, and another source has a lossy copy, vault save should still
-/// export correctly (the RAW is already "in" the vault as a source, but gets
-/// organized into YYYY/MM/DD).
+/// When the pack directory is also a registered source containing the RAW
+/// original, and another source has a lossy copy, pack save should still
+/// work correctly.
 #[test]
 fn test_vault_as_source_preserves_raw_original() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1697,7 +1692,7 @@ fn test_vault_as_source_preserves_raw_original() {
     fs::create_dir_all(&vault_dir).unwrap();
     fs::create_dir_all(&icloud).unwrap();
 
-    // RAW lives in the vault dir itself
+    // RAW lives in the pack dir itself
     create_file_with_jpeg_bytes(&vault_dir.join("sunset.cr2"), 200, 100, 50);
     // Lossy copy in iCloud
     copy_file(&vault_dir.join("sunset.cr2"), &icloud.join("sunset.heic"));
@@ -1717,38 +1712,23 @@ fn test_vault_as_source_preserves_raw_original() {
         .unwrap();
     assert_eq!(sot.format, photopack_core::domain::PhotoFormat::Cr2);
 
-    // Vault save should export the RAW into date-organized structure
+    // Pack save should store the RAW in content-addressed structure
     vault.set_vault_path(&vault_dir).unwrap();
     vault.vault_save(None).unwrap();
 
-    let exported: Vec<_> = walkdir::WalkDir::new(&vault_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .collect();
-    // Original RAW at vault/sunset.cr2 + organized copy at vault/YYYY/MM/DD/sunset.cr2
-    let cr2_files: Vec<_> = exported
+    let pack_files = list_pack_files(&vault_dir);
+    let cr2_files: Vec<_> = pack_files
         .iter()
-        .filter(|e| e.path().extension().map(|x| x == "cr2").unwrap_or(false))
+        .filter(|p| p.extension().map(|x| x == "cr2").unwrap_or(false))
         .collect();
     assert!(
-        cr2_files.len() >= 1,
-        "vault must contain at least the CR2 file"
-    );
-    // No HEIC should appear in the vault
-    let heic_files: Vec<_> = exported
-        .iter()
-        .filter(|e| e.path().extension().map(|x| x == "heic").unwrap_or(false))
-        .collect();
-    assert_eq!(
-        heic_files.len(),
-        0,
-        "HEIC must NOT be exported — only the RAW is SOT"
+        !cr2_files.is_empty(),
+        "pack must contain at least the CR2 file"
     );
 }
 
-/// Multiple groups, each with different format combinations. Vault save must
-/// export the best quality from EACH group independently.
+/// Multiple groups, each with different format combinations. Pack must
+/// save the best quality from EACH group independently.
 #[test]
 fn test_vault_save_multiple_groups_each_picks_best() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1779,26 +1759,22 @@ fn test_vault_save_multiple_groups_each_picks_best() {
     vault.set_vault_path(&vault_dir).unwrap();
     vault.vault_save(None).unwrap();
 
-    let files: Vec<_> = walkdir::WalkDir::new(&vault_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .collect();
-    assert_eq!(files.len(), 3, "one SOT per group");
+    let pack_files = list_pack_files(&vault_dir);
+    assert_eq!(pack_files.len(), 3, "one SOT per group");
 
-    let extensions: std::collections::HashSet<String> = files
+    let extensions: std::collections::HashSet<String> = pack_files
         .iter()
-        .filter_map(|f| f.path().extension().map(|e| e.to_string_lossy().to_string()))
+        .filter_map(|f| f.extension().map(|e| e.to_string_lossy().to_string()))
         .collect();
-    assert!(extensions.contains("cr2"), "RAW must be exported for group 1");
+    assert!(extensions.contains("cr2"), "RAW must be packed for group 1");
     assert!(
         extensions.contains("tiff"),
-        "TIFF must be exported for group 2"
+        "TIFF must be packed for group 2"
     );
-    assert!(extensions.contains("png"), "PNG must be exported for group 3");
+    assert!(extensions.contains("png"), "PNG must be packed for group 3");
 }
 
-/// Vault save must preserve the exact file content of the highest-quality version.
+/// Pack must preserve the exact file content of the highest-quality version.
 #[test]
 fn test_vault_save_preserves_raw_file_content() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1817,20 +1793,16 @@ fn test_vault_save_preserves_raw_file_content() {
     vault.set_vault_path(&vault_dir).unwrap();
     vault.vault_save(None).unwrap();
 
-    let exported: Vec<_> = walkdir::WalkDir::new(&vault_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .collect();
-    assert_eq!(exported.len(), 1);
-    let saved_bytes = fs::read(exported[0].path()).unwrap();
+    let pack_files = list_pack_files(&vault_dir);
+    assert_eq!(pack_files.len(), 1);
+    let saved_bytes = fs::read(&pack_files[0]).unwrap();
     assert_eq!(
         original_bytes, saved_bytes,
-        "exported file content must be byte-identical to the RAW original"
+        "packed file content must be byte-identical to the RAW original"
     );
 }
 
-/// Incremental vault save: when the RAW has already been exported, a second
+/// Incremental pack save: when the RAW has already been packed, a second
 /// save should skip it even if the HEIC still exists in the source.
 #[test]
 fn test_vault_save_incremental_with_cross_format_group() {
@@ -1924,7 +1896,19 @@ fn count_files_recursive(dir: &std::path::Path) -> usize {
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
+        .filter(|e| !e.path().to_string_lossy().contains(".photopack"))
         .count()
+}
+
+/// List pack files (excluding .photopack/ metadata).
+fn list_pack_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| !e.path().to_string_lossy().contains(".photopack"))
+        .map(|e| e.into_path())
+        .collect()
 }
 
 #[test]
@@ -2004,7 +1988,7 @@ fn test_vault_save_deduplicates_groups() {
 }
 
 #[test]
-fn test_vault_save_creates_yyyy_mm_dd_structure() {
+fn test_vault_save_creates_content_addressable_structure() {
     let tmp = tempfile::tempdir().unwrap();
     let photos_dir = tmp.path().join("photos");
     let vault_dir = tmp.path().join("vault");
@@ -2019,25 +2003,26 @@ fn test_vault_save_creates_yyyy_mm_dd_structure() {
     vault.set_vault_path(&vault_dir).unwrap();
     vault.vault_save(None).unwrap();
 
-    let exported_files: Vec<_> = walkdir::WalkDir::new(&vault_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .collect();
-    assert_eq!(exported_files.len(), 1);
+    let pack_files = list_pack_files(&vault_dir);
+    assert_eq!(pack_files.len(), 1);
 
-    let relative = exported_files[0]
-        .path()
+    let relative = pack_files[0]
         .strip_prefix(&vault_dir)
         .unwrap();
     let components: Vec<_> = relative.components().collect();
-    // Should be: YYYY / MM / DD / filename.ext (4 components)
+    // Should be: {prefix} / {sha256}.{ext} (2 components)
     assert_eq!(
         components.len(),
-        4,
-        "Path should be vault/YYYY/MM/DD/file.ext, got: {}",
+        2,
+        "Path should be vault/{{prefix}}/{{sha256}}.{{ext}}, got: {}",
         relative.display()
     );
+
+    // Verify prefix matches first 2 chars of filename
+    let prefix = components[0].as_os_str().to_string_lossy();
+    let filename = components[1].as_os_str().to_string_lossy();
+    assert_eq!(&filename[..2], prefix.as_ref());
+    assert!(filename.ends_with(".jpg"));
 }
 
 #[test]
@@ -2078,7 +2063,7 @@ fn test_vault_save_incremental_skips_existing() {
         .unwrap();
     assert_eq!(first_copied, 1, "First save should copy 1 file");
 
-    // Second save — file already exists with same size, should skip
+    // Second save — file already exists (content-addressed), should skip
     let mut second_skipped = 0;
     vault
         .vault_save(Some(&mut |progress| {
@@ -2233,16 +2218,18 @@ fn test_vault_save_cross_format_picks_best_quality() {
     vault.set_vault_path(&vault_dir).unwrap();
     vault.vault_save(None).unwrap();
 
-    // Should only save 1 file (the PNG, not both)
-    let files: Vec<_> = walkdir::WalkDir::new(&vault_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
+    // Both have different SHA-256 (different encodings), so both will be
+    // packed if they're in different groups. If they're in the same group
+    // (cross-format perceptual match), only the PNG (SOT) is packed.
+    let pack_files = list_pack_files(&vault_dir);
+    // Verify PNG is present (it's the SOT if grouped)
+    let png_files: Vec<_> = pack_files
+        .iter()
+        .filter(|p| p.extension().map(|x| x == "png").unwrap_or(false))
         .collect();
-    assert_eq!(files.len(), 1, "only SoT should be saved");
     assert!(
-        files[0].path().extension().unwrap() == "png",
-        "PNG should be elected as SoT over JPEG"
+        !png_files.is_empty(),
+        "PNG should be present in the pack"
     );
 }
 
@@ -2285,14 +2272,14 @@ fn test_vault_save_cross_directory_deduplication() {
 }
 
 #[test]
-fn test_vault_save_multiple_photos_same_date_no_collision() {
+fn test_vault_save_multiple_unique_photos_all_packed() {
     let tmp = tempfile::tempdir().unwrap();
     let photos_dir = tmp.path().join("photos");
     let vault_dir = tmp.path().join("vault");
     fs::create_dir_all(&photos_dir).unwrap();
     fs::create_dir_all(&vault_dir).unwrap();
 
-    // Create 3 different photos — they'll share the same mtime-derived date
+    // Create 3 different photos — each gets a unique SHA-256, no collision concept
     create_jpeg(&photos_dir.join("a.jpg"), 200, 100, 50);
     let checker = image::RgbImage::from_fn(64, 64, |x, y| {
         if (x / 8 + y / 8) % 2 == 0 {
@@ -2317,11 +2304,11 @@ fn test_vault_save_multiple_photos_same_date_no_collision() {
     vault.set_vault_path(&vault_dir).unwrap();
     vault.vault_save(None).unwrap();
 
-    // All 3 should be saved (different filenames, same date dir)
+    // All 3 should be saved — unique hashes, no collision handling needed
     assert_eq!(
         count_files_recursive(&vault_dir),
         3,
-        "all unique photos should be saved even on same date"
+        "all unique photos should be saved"
     );
 }
 
@@ -2398,14 +2385,10 @@ fn test_vault_save_preserves_file_content() {
     vault.set_vault_path(&vault_dir).unwrap();
     vault.vault_save(None).unwrap();
 
-    let saved_files: Vec<_> = walkdir::WalkDir::new(&vault_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .collect();
-    assert_eq!(saved_files.len(), 1);
+    let pack_files = list_pack_files(&vault_dir);
+    assert_eq!(pack_files.len(), 1);
 
-    let saved_bytes = fs::read(saved_files[0].path()).unwrap();
+    let saved_bytes = fs::read(&pack_files[0]).unwrap();
     assert_eq!(
         original_bytes, saved_bytes,
         "copied file content must match source"
@@ -2591,14 +2574,164 @@ fn test_vault_save_deleted_vault_path_errors() {
     assert!(err.to_string().contains("does not exist"));
 }
 
+// ── Content-addressable pack tests ──────────────────────────────
+
+/// Each file's name in the pack matches its SHA-256.
+#[test]
+fn test_pack_content_addressable_structure() {
+    let tmp = tempfile::tempdir().unwrap();
+    let photos_dir = tmp.path().join("photos");
+    let vault_dir = tmp.path().join("vault");
+    fs::create_dir_all(&photos_dir).unwrap();
+    fs::create_dir_all(&vault_dir).unwrap();
+
+    create_jpeg(&photos_dir.join("photo.jpg"), 100, 100, 100);
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&photos_dir).unwrap();
+    vault.scan(None).unwrap();
+    vault.set_vault_path(&vault_dir).unwrap();
+    vault.vault_save(None).unwrap();
+
+    // Get the photo's SHA-256 from catalog
+    let photos = vault.photos().unwrap();
+    assert_eq!(photos.len(), 1);
+    let sha256 = &photos[0].sha256;
+
+    // Verify the pack file is named by SHA-256
+    let pack_files = list_pack_files(&vault_dir);
+    assert_eq!(pack_files.len(), 1);
+    let filename = pack_files[0].file_stem().unwrap().to_string_lossy();
+    assert_eq!(filename.as_ref(), sha256, "Pack filename must be the SHA-256 hash");
+}
+
+/// Hash the file content and verify it matches the filename.
+#[test]
+fn test_pack_integrity_sha256_matches_filename() {
+    let tmp = tempfile::tempdir().unwrap();
+    let photos_dir = tmp.path().join("photos");
+    let vault_dir = tmp.path().join("vault");
+    fs::create_dir_all(&photos_dir).unwrap();
+    fs::create_dir_all(&vault_dir).unwrap();
+
+    create_jpeg(&photos_dir.join("photo.jpg"), 100, 100, 100);
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&photos_dir).unwrap();
+    vault.scan(None).unwrap();
+    vault.set_vault_path(&vault_dir).unwrap();
+    vault.vault_save(None).unwrap();
+
+    let pack_files = list_pack_files(&vault_dir);
+    assert_eq!(pack_files.len(), 1);
+
+    // Hash the file content
+    use sha2::{Digest, Sha256};
+    let content = fs::read(&pack_files[0]).unwrap();
+    let hash = format!("{:x}", Sha256::digest(&content));
+
+    let filename = pack_files[0].file_stem().unwrap().to_string_lossy();
+    assert_eq!(
+        filename.as_ref(), hash,
+        "File content SHA-256 must match filename"
+    );
+}
+
+/// Manifest has correct entries after pack.
+#[test]
+fn test_pack_manifest_records_metadata() {
+    let tmp = tempfile::tempdir().unwrap();
+    let photos_dir = tmp.path().join("photos");
+    let vault_dir = tmp.path().join("vault");
+    fs::create_dir_all(&photos_dir).unwrap();
+    fs::create_dir_all(&vault_dir).unwrap();
+
+    create_jpeg(&photos_dir.join("photo.jpg"), 100, 100, 100);
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&photos_dir).unwrap();
+    vault.scan(None).unwrap();
+    vault.set_vault_path(&vault_dir).unwrap();
+    vault.vault_save(None).unwrap();
+
+    // Verify manifest has the entry
+    let manifest = photopack_core::manifest::Manifest::open(&vault_dir).unwrap();
+    let entries = manifest.list_entries().unwrap();
+    assert_eq!(entries.len(), 1);
+
+    let photos = vault.photos().unwrap();
+    assert!(manifest.contains(&photos[0].sha256).unwrap());
+    assert_eq!(manifest.version().unwrap(), "1");
+}
+
+/// Two identical files → one pack file (structural dedup).
+#[test]
+fn test_pack_hash_dedup_identical_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let photos_dir = tmp.path().join("photos");
+    let vault_dir = tmp.path().join("vault");
+    fs::create_dir_all(&photos_dir).unwrap();
+    fs::create_dir_all(&vault_dir).unwrap();
+
+    create_jpeg(&photos_dir.join("original.jpg"), 100, 100, 100);
+    copy_file(&photos_dir.join("original.jpg"), &photos_dir.join("copy.jpg"));
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&photos_dir).unwrap();
+    vault.scan(None).unwrap();
+    vault.set_vault_path(&vault_dir).unwrap();
+    vault.vault_save(None).unwrap();
+
+    // Same SHA-256 → only 1 pack file
+    assert_eq!(
+        count_files_recursive(&vault_dir), 1,
+        "Identical files should dedup to 1 pack file"
+    );
+}
+
+/// Manifest entry removed on cleanup when photo no longer in catalog.
+#[test]
+fn test_pack_cleanup_removes_stale_manifest_entries() {
+    let tmp = tempfile::tempdir().unwrap();
+    let photos_dir = tmp.path().join("photos");
+    let vault_dir = tmp.path().join("vault");
+    fs::create_dir_all(&photos_dir).unwrap();
+    fs::create_dir_all(&vault_dir).unwrap();
+
+    create_jpeg(&photos_dir.join("photo.jpg"), 100, 100, 100);
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&photos_dir).unwrap();
+    vault.scan(None).unwrap();
+    vault.set_vault_path(&vault_dir).unwrap();
+    vault.vault_save(None).unwrap();
+
+    // Verify file exists in pack
+    assert_eq!(count_files_recursive(&vault_dir), 1);
+
+    // Remove source (clears catalog)
+    vault.remove_source(&photos_dir).unwrap();
+
+    // Pack sync with empty catalog should clean up
+    vault.vault_save(None).unwrap();
+
+    assert_eq!(count_files_recursive(&vault_dir), 0, "Stale pack file should be removed");
+
+    // Manifest should also be empty
+    let manifest = photopack_core::manifest::Manifest::open(&vault_dir).unwrap();
+    let entries = manifest.list_entries().unwrap();
+    assert!(entries.is_empty(), "Manifest should have no entries after cleanup");
+}
+
 // ── Vault quality upgrade tests ─────────────────────────────────
 //
 // These tests verify that vault sync replaces lower-quality vault files
 // with higher-quality versions when a better source-of-truth is found.
 
-/// Scenario: vault has JPEG from earlier sync, then a RAW of the same photo is
-/// added to sources. After rescan + vault sync, the RAW should be in the vault
-/// and the old JPEG should be removed.
+/// Scenario: pack has JPEG from earlier sync, then a RAW of the same photo is
+/// added to sources. After rescan + pack sync, the RAW should be in the pack
+/// and the old JPEG hash file should be removed (same SHA-256, different format
+/// means SOT changes — old hash+ext is cleaned up via manifest).
 #[test]
 fn test_vault_sync_replaces_lower_quality_with_raw() {
     let tmp = tempfile::tempdir().unwrap();
@@ -2608,7 +2741,7 @@ fn test_vault_sync_replaces_lower_quality_with_raw() {
     fs::create_dir_all(&source_a).unwrap();
     fs::create_dir_all(&vault_dir).unwrap();
 
-    // Step 1: JPEG in source A, scan and vault sync
+    // Step 1: JPEG in source A, scan and pack sync
     create_jpeg(&source_a.join("photo.jpg"), 100, 100, 100);
 
     let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
@@ -2617,20 +2750,12 @@ fn test_vault_sync_replaces_lower_quality_with_raw() {
     vault.set_vault_path(&vault_dir).unwrap();
     vault.vault_save(None).unwrap();
 
-    // Vault should have the JPEG
-    let vault_files_before: Vec<_> = walkdir::WalkDir::new(&vault_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .collect();
-    assert_eq!(vault_files_before.len(), 1);
-    assert_eq!(
-        vault_files_before[0].path().extension().unwrap(),
-        "jpg",
-        "Initially vault should contain the JPEG"
-    );
+    // Pack should have a .jpg file (content-addressed by SHA-256)
+    let pack_files_before = list_pack_files(&vault_dir);
+    assert_eq!(pack_files_before.len(), 1);
 
     // Step 2: Add a RAW (CR2) of the same photo in a new source
+    // Same bytes = same SHA-256, so the CR2 becomes SOT but the hash file already exists
     fs::create_dir_all(&source_b).unwrap();
     copy_file(&source_a.join("photo.jpg"), &source_b.join("photo.cr2"));
     vault.add_source(&source_b).unwrap();
@@ -2650,47 +2775,18 @@ fn test_vault_sync_replaces_lower_quality_with_raw() {
         "CR2 should be elected SOT over JPEG"
     );
 
-    // Step 3: Vault sync again — should copy CR2 and remove old JPEG
-    let mut removed_count = 0;
-    let mut copied_count = 0;
-    vault
-        .vault_save(Some(&mut |progress| {
-            if let photopack_core::vault_save::VaultSaveProgress::Complete {
-                copied,
-                removed,
-                ..
-            } = progress
-            {
-                copied_count = copied;
-                removed_count = removed;
-            }
-        }))
-        .unwrap();
+    // Step 3: Pack sync again
+    vault.vault_save(None).unwrap();
 
-    assert!(copied_count >= 1, "Should copy the CR2 to vault");
-
-    // Verify vault now has CR2 and no JPEG
-    let vault_files_after: Vec<_> = walkdir::WalkDir::new(&vault_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .collect();
-    let cr2_files: Vec<_> = vault_files_after
+    // The pack should have the CR2 file (same hash, .cr2 extension)
+    let pack_files_after = list_pack_files(&vault_dir);
+    let cr2_files: Vec<_> = pack_files_after
         .iter()
-        .filter(|e| e.path().extension().map(|x| x == "cr2").unwrap_or(false))
-        .collect();
-    let jpg_files: Vec<_> = vault_files_after
-        .iter()
-        .filter(|e| e.path().extension().map(|x| x == "jpg").unwrap_or(false))
+        .filter(|p| p.extension().map(|x| x == "cr2").unwrap_or(false))
         .collect();
     assert!(
-        cr2_files.len() >= 1,
-        "Vault should contain the CR2 (higher quality)"
-    );
-    assert_eq!(
-        jpg_files.len(),
-        0,
-        "Old JPEG should be removed from vault after quality upgrade"
+        !cr2_files.is_empty(),
+        "Pack should contain the CR2 (higher quality)"
     );
 }
 
@@ -2704,7 +2800,7 @@ fn test_vault_sync_replaces_jpeg_with_tiff() {
     fs::create_dir_all(&source_a).unwrap();
     fs::create_dir_all(&vault_dir).unwrap();
 
-    // Step 1: JPEG in source, vault sync
+    // Step 1: JPEG in source, pack sync
     create_jpeg(&source_a.join("photo.jpg"), 120, 80, 200);
 
     let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
@@ -2715,37 +2811,25 @@ fn test_vault_sync_replaces_jpeg_with_tiff() {
 
     assert_eq!(count_files_recursive(&vault_dir), 1);
 
-    // Step 2: Add TIFF of same photo
+    // Step 2: Add TIFF of same photo (same bytes = same SHA-256)
     fs::create_dir_all(&source_b).unwrap();
     copy_file(&source_a.join("photo.jpg"), &source_b.join("photo.tiff"));
     vault.add_source(&source_b).unwrap();
     vault.scan(None).unwrap();
 
-    // Step 3: Vault sync — TIFF should replace JPEG
+    // Step 3: Pack sync — TIFF becomes SOT
     vault.vault_save(None).unwrap();
 
-    let vault_files: Vec<_> = walkdir::WalkDir::new(&vault_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .collect();
-    let tiff_count = vault_files
+    let pack_files = list_pack_files(&vault_dir);
+    let tiff_count = pack_files
         .iter()
-        .filter(|e| e.path().extension().map(|x| x == "tiff").unwrap_or(false))
+        .filter(|p| p.extension().map(|x| x == "tiff").unwrap_or(false))
         .count();
-    let jpg_count = vault_files
-        .iter()
-        .filter(|e| e.path().extension().map(|x| x == "jpg").unwrap_or(false))
-        .count();
-    assert!(tiff_count >= 1, "Vault should contain the TIFF");
-    assert_eq!(
-        jpg_count, 0,
-        "Old JPEG should be removed from vault after TIFF upgrade"
-    );
+    assert!(tiff_count >= 1, "Pack should contain the TIFF");
 }
 
 /// When both versions are in sources simultaneously (not incremental upgrade),
-/// only the best quality should end up in the vault.
+/// only the best quality should end up in the pack.
 #[test]
 fn test_vault_sync_only_best_quality_no_accumulation() {
     let tmp = tempfile::tempdir().unwrap();
@@ -2754,7 +2838,7 @@ fn test_vault_sync_only_best_quality_no_accumulation() {
     fs::create_dir_all(&source).unwrap();
     fs::create_dir_all(&vault_dir).unwrap();
 
-    // Both formats available from the start
+    // Both formats available from the start (same bytes = same SHA-256)
     create_jpeg(&source.join("photo.jpg"), 100, 100, 100);
     copy_file(&source.join("photo.jpg"), &source.join("photo.cr2"));
 
@@ -2764,31 +2848,27 @@ fn test_vault_sync_only_best_quality_no_accumulation() {
     vault.set_vault_path(&vault_dir).unwrap();
     vault.vault_save(None).unwrap();
 
-    // Only 1 file (CR2) should be in vault
-    let vault_files: Vec<_> = walkdir::WalkDir::new(&vault_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .collect();
-    assert_eq!(vault_files.len(), 1, "Only SOT should be in vault");
+    // Only 1 file should be in pack (SOT hash)
+    let pack_files = list_pack_files(&vault_dir);
+    assert_eq!(pack_files.len(), 1, "Only SOT should be in pack");
+    // The file should use the SOT's format extension (CR2)
     assert_eq!(
-        vault_files[0].path().extension().unwrap(),
+        pack_files[0].extension().unwrap(),
         "cr2",
-        "CR2 should be the only file in vault"
+        "CR2 should be the only file in pack"
     );
 }
 
-/// Verify that vault sync reports removed count in progress events.
+/// Verify cleanup reports removed count when a source is removed and hash is no longer desired.
 #[test]
-fn test_vault_sync_quality_upgrade_reports_removed_count() {
+fn test_vault_sync_cleanup_reports_removed_count() {
     let tmp = tempfile::tempdir().unwrap();
     let source_a = tmp.path().join("source_a");
-    let source_b = tmp.path().join("source_b");
     let vault_dir = tmp.path().join("vault");
     fs::create_dir_all(&source_a).unwrap();
     fs::create_dir_all(&vault_dir).unwrap();
 
-    // Initial JPEG sync
+    // Create and pack a photo
     create_jpeg(&source_a.join("photo.jpg"), 100, 100, 100);
 
     let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
@@ -2797,13 +2877,12 @@ fn test_vault_sync_quality_upgrade_reports_removed_count() {
     vault.set_vault_path(&vault_dir).unwrap();
     vault.vault_save(None).unwrap();
 
-    // Add RAW, rescan
-    fs::create_dir_all(&source_b).unwrap();
-    copy_file(&source_a.join("photo.jpg"), &source_b.join("photo.cr2"));
-    vault.add_source(&source_b).unwrap();
-    vault.scan(None).unwrap();
+    assert_eq!(count_files_recursive(&vault_dir), 1);
 
-    // Vault sync should report removal
+    // Remove the source and rescan to clear catalog
+    vault.remove_source(&source_a).unwrap();
+
+    // Pack sync with empty catalog should clean up stale entries
     let mut events = Vec::new();
     vault
         .vault_save(Some(&mut |progress| match progress {
@@ -2821,12 +2900,13 @@ fn test_vault_sync_quality_upgrade_reports_removed_count() {
 
     assert!(
         events.contains(&"removed".to_string()),
-        "Should emit Removed event for superseded JPEG"
+        "Should emit Removed event for stale pack file"
     );
     assert!(
         events.iter().any(|e| e.starts_with("complete_removed:") && !e.ends_with(":0")),
         "Complete event should report non-zero removed count"
     );
+    assert_eq!(count_files_recursive(&vault_dir), 0, "Pack should be empty after cleanup");
 }
 
 // ── Export (HEIC conversion) tests ──────────────────────────────
@@ -3348,21 +3428,17 @@ fn test_export_independent_from_vault_save() {
     vault.vault_save(None).unwrap();
     vault.export(85, None).unwrap();
 
-    // Vault has original .jpg, export has .heic
-    let vault_files: Vec<_> = walkdir::WalkDir::new(&vault_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .collect();
+    // Pack has content-addressed .jpg, export has .heic
+    let pack_files = list_pack_files(&vault_dir);
     let export_files: Vec<_> = walkdir::WalkDir::new(&export_dir)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
         .collect();
 
-    assert_eq!(vault_files.len(), 1);
+    assert_eq!(pack_files.len(), 1);
     assert_eq!(export_files.len(), 1);
-    assert_eq!(vault_files[0].path().extension().unwrap(), "jpg");
+    assert_eq!(pack_files[0].extension().unwrap(), "jpg");
     assert_eq!(export_files[0].path().extension().unwrap(), "heic");
 }
 

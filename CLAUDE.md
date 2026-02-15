@@ -12,7 +12,7 @@ cargo clippy --workspace
 
 ## Architecture
 
-- `crates/core` — library: domain types, catalog (SQLite), scanner, hasher, EXIF, matching, ranking, export
+- `crates/core` — library: domain types, catalog (SQLite), scanner, hasher, EXIF, matching, ranking, manifest, export
 - `crates/cli` — binary (`photopack`): CLI interface using clap
 
 ## Conventions
@@ -33,8 +33,9 @@ cargo clippy --workspace
 - **EXIF matching filters burst shots**: Phase 2 uses perceptual hash as a strict filter (NEAR_CERTAIN threshold ≤2). Sequential/burst shots (distance 3+) are rejected. Members without phash (HEIC/RAW) are kept.
 - **Sequential shot filter (Phase 3)**: Photos from the same camera with EXIF dates 1-60 seconds apart (but not identical) are rejected as sequential/burst shots. True duplicates always have identical EXIF dates. This prevents false positives from visually similar but distinct consecutive photos that produce identical hashes at 9x8 resolution.
 - **Merge safeguards**: Phase 4 requires cross-group visual validation before merging overlapping groups. At least one pair of exclusive members must be perceptually close. Prevents cascading false merges through bridge photos.
-- **Vault auto-registers as source**: `set_vault_path` automatically registers the vault directory as a scan source (idempotent).
-- **Vault quality upgrade**: During vault sync, superseded vault files (group members in the vault that are NOT the source-of-truth) are automatically removed. This ensures the vault always contains only the highest-quality version.
+- **Content-addressable pack**: Pack files are named by SHA-256 hash with 2-char prefix sharding (`{hash[..2]}/{hash}.{ext}`). Deduplication is structural (same hash = same file). An embedded manifest at `.photopack/manifest.sqlite` maps hashes to metadata (original filename, format, size, EXIF). Cleanup removes entries not in the desired hash set. No collision handling needed — hash uniqueness is guaranteed.
+- **Pack auto-registers as source**: `set_vault_path` automatically registers the pack directory as a scan source (idempotent).
+- **Pack quality upgrade**: When a higher-quality format becomes SOT, the new format's hash-named file is written to the pack. Stale entries (hashes no longer in the desired set) are cleaned up via the manifest.
 - **Two-phase hashing**: Scan computes SHA-256 + EXIF first (fast, I/O-bound), then perceptual hashes only for unique SHA-256 content. Exact duplicates skip image decoding entirely; existing catalog hashes are reused. Batch mtime check replaces per-file queries.
 - **Incremental scan**: Files are skipped if their mtime hasn't changed. Files deleted from disk are removed from the catalog (`remove_photos_by_paths`). Groups are rebuilt from scratch each scan.
 - **HEIC export via sips**: Uses macOS `sips` command for HEIC conversion (zero dependencies). Invoked via `photopack export`, independent from lossless vault sync. Reads from catalog (source directories), not the vault. Skip by file existence (not size, since conversion changes size). `#[cfg(target_os = "macos")]` gates for e2e tests.
@@ -42,12 +43,31 @@ cargo clippy --workspace
 
 ## Testing
 
-- 367 tests total (28 CLI + 215 core + 124 e2e)
+- 353 tests total (28 CLI + 218 core + 129 e2e) — counts may vary after refactoring
 - E2E tests in `crates/core/tests/vault_e2e.rs` use real JPEG/PNG generation via the `image` crate
 - Cross-format testing: use `create_file_with_jpeg_bytes()` to write JPEG bytes to `.cr2`/`.heic`/`.dng` etc. — scanner assigns format from extension, hashes work on raw bytes
 - Use structurally different patterns (gradient vs checkerboard vs stripes) in tests to ensure distinct perceptual hashes — color-only differences are not enough
 - `tempfile` crate for isolated test directories
 - CLI status tests: extracted testable logic (StatusData, compute_aggregates, etc.) for unit testing without stdout capture
-- Vault sync tests cover: date parsing, collision handling, incremental skip, cross-format dedup, progress events, error cases, file content preservation, quality upgrade with superseded file cleanup
+- Pack sync tests cover: date parsing, content-addressable paths, incremental skip, cross-format dedup, progress events, error cases, file content preservation, manifest integration, cleanup
 - Quality preservation tests: all format tier combinations (CR2>JPEG, DNG>JPEG, CR2>HEIC, TIFF>JPEG, PNG>HEIC, JPEG>HEIC), vault as source preserves RAW, vault replaces lower-quality with higher-quality on resync
 - HEIC export tests: macOS-only tests gated with `#[cfg(target_os = "macos")]`, cross-platform config/error tests run everywhere
+
+### Test Coverage
+
+Tests across 28 CLI + core library + end-to-end:
+
+- **Matching** (104 tests) — All 4 phases individually and combined. Sequential shot filter (burst detection, boundary cases, cross-format interaction, mixed with true duplicates). Dual-hash consensus (accept/reject matrix). EXIF filtering (camera model, date presence, phash validation). Cross-format grouping (HEIC/RAW without phash, HIGH threshold). BK-tree distance thresholds. Merge safeguards (cross-group visual validation, pure subsets, bridge photos). Transitive merge chains. Full pipeline scenarios (iPhone original+export+HEIC triplets, recompressed JPEGs, renamed files, 10-photo batch, sequential shots among true duplicates).
+- **CLI dashboard** (28 tests) — format_size, source_display_name, StatusData, is_duplicate, vault_eligible, compute_aggregates, compute_source_stats, sort_photos_for_display
+- **Catalog** (26 tests) — CRUD operations, format/confidence roundtrip, mtime tracking, config persistence, source removal, perceptual hash invalidation
+- **Vault sync** (20 tests) — Date parsing, EXIF/mtime fallback, photo selection, content-addressable paths, incremental copy, manifest tests
+- **Manifest** (6 tests) — Open/create, version, insert/contains, remove, list, idempotent insert
+- **Export** (21 tests) — build_export_path (all format extensions, collision, skip, no-extension), export_photo_to_heic (skip/convert), convert_to_heic (parent dirs, invalid source, output validation, quality effect), sips availability
+- **Perceptual hash** (17 tests) — Hamming distance, manual aHash/dHash computation, real JPEG/PNG hashing, EXIF orientation (identity, 90 CW, 180, 90 CCW)
+- **Scanner** (11 tests) — Directory walk, format filtering, nested directories (deep nesting, multiple levels, siblings, symlinks)
+- **Domain** (6 tests) — Quality tiers, format extension, format support, confidence ordering
+- **EXIF** (5 tests) — Edge cases, missing data, non-image files
+- **SHA-256** (4 tests) — Consistency, empty files, error handling
+- **Ranking** (3 tests) — Format preference, size tiebreak, mtime tiebreak
+- **Confidence** (2 tests) — Hamming distance to confidence mapping, confidence combination
+- **E2E** (129 tests) — Full vault lifecycle, cross-directory and cross-format duplicates, incremental scan, source-of-truth election, source removal (with group cleanup), pack auto-registration as source, photos API, quality preservation (all format tier combinations: CR2>JPEG, DNG>JPEG, CR2>HEIC, TIFF>JPEG, PNG>HEIC, JPEG>HEIC, pack as source preserves RAW, pack replaces lower-quality on resync), nested directories (multi-level, cross-source, incremental), stale file cleanup (deleted files, all deleted, cross-source, group member removal), phash version tracking (cache invalidation, mtime reset, recomputation), pack sync (content-addressable structure, SHA-256 integrity, manifest metadata, hash dedup, cleanup of stale entries, deduplication, incremental skip, progress events, error cases, file integrity), HEIC export (JPEG/PNG conversion, multi-source, nested dirs, dedup, cross-source dedup, incremental skip+rescan, independent from pack sync, progress events, config persistence, error handling, file validity)

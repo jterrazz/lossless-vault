@@ -54,6 +54,25 @@ impl PhotoFormat {
         }
     }
 
+    /// File extension for this format (lowercase, no dot).
+    pub fn extension(&self) -> &'static str {
+        match self {
+            Self::Cr2 => "cr2",
+            Self::Cr3 => "cr3",
+            Self::Nef => "nef",
+            Self::Arw => "arw",
+            Self::Orf => "orf",
+            Self::Raf => "raf",
+            Self::Rw2 => "rw2",
+            Self::Dng => "dng",
+            Self::Tiff => "tiff",
+            Self::Png => "png",
+            Self::Jpeg => "jpg",
+            Self::Heic => "heic",
+            Self::Webp => "webp",
+        }
+    }
+
     /// Whether the `image` crate can decode this format for perceptual hashing.
     pub fn supports_perceptual_hash(&self) -> bool {
         matches!(self, Self::Jpeg | Self::Png | Self::Tiff | Self::Webp)
@@ -204,6 +223,23 @@ mod tests {
         assert_eq!(Confidence::NearCertain.as_str(), "Near-Certain");
         assert_eq!(Confidence::Low.as_str(), "Low");
         assert_eq!(format!("{}", Confidence::High), "High");
+    }
+
+    #[test]
+    fn test_photo_format_extension() {
+        assert_eq!(PhotoFormat::Cr2.extension(), "cr2");
+        assert_eq!(PhotoFormat::Cr3.extension(), "cr3");
+        assert_eq!(PhotoFormat::Nef.extension(), "nef");
+        assert_eq!(PhotoFormat::Arw.extension(), "arw");
+        assert_eq!(PhotoFormat::Orf.extension(), "orf");
+        assert_eq!(PhotoFormat::Raf.extension(), "raf");
+        assert_eq!(PhotoFormat::Rw2.extension(), "rw2");
+        assert_eq!(PhotoFormat::Dng.extension(), "dng");
+        assert_eq!(PhotoFormat::Tiff.extension(), "tiff");
+        assert_eq!(PhotoFormat::Png.extension(), "png");
+        assert_eq!(PhotoFormat::Jpeg.extension(), "jpg");
+        assert_eq!(PhotoFormat::Heic.extension(), "heic");
+        assert_eq!(PhotoFormat::Webp.extension(), "webp");
     }
 
     #[test]

@@ -4,6 +4,7 @@ pub mod error;
 pub mod exif;
 pub mod export;
 pub mod hasher;
+pub mod manifest;
 pub mod matching;
 pub mod ranking;
 pub mod scanner;
@@ -356,23 +357,26 @@ impl Vault {
         Ok(self.catalog.get_config("vault_path")?.map(PathBuf::from))
     }
 
-    /// Copy deduplicated photos to the vault directory.
+    /// Copy deduplicated photos to the pack directory using content-addressable storage.
     /// For each duplicate group, only the source-of-truth is copied.
     /// Ungrouped photos are copied as-is.
-    /// Photos are organized into YYYY/MM/DD folders based on EXIF date (mtime fallback).
+    /// Files are named by their SHA-256 hash with 2-char prefix sharding.
+    /// An embedded manifest tracks all pack entries for cleanup and integrity verification.
     pub fn vault_save(
         &mut self,
         mut progress_cb: Option<&mut dyn FnMut(vault_save::VaultSaveProgress)>,
     ) -> Result<()> {
-        let vault_path = self
+        let pack_path = self
             .catalog
             .get_config("vault_path")?
             .map(PathBuf::from)
             .ok_or(Error::VaultPathNotSet)?;
 
-        if !vault_path.is_dir() {
-            return Err(Error::VaultPathNotFound(vault_path));
+        if !pack_path.is_dir() {
+            return Err(Error::VaultPathNotFound(pack_path));
         }
+
+        let pack_manifest = manifest::Manifest::open(&pack_path)?;
 
         let all_photos = self.catalog.list_all_photos()?;
         let groups = self.catalog.list_groups()?;
@@ -384,53 +388,95 @@ impl Vault {
             });
         }
 
-        // Pre-compute targets sequentially (needs filesystem checks for collisions)
+        // Build desired hashes set for cleanup
+        let desired_hashes: HashSet<String> =
+            to_save.iter().map(|p| p.sha256.clone()).collect();
+
+        // Build targets — pure function, no I/O needed
         let targets: Vec<(&PhotoFile, PathBuf)> = to_save
             .iter()
             .map(|photo| {
-                let date = vault_save::date_for_photo(photo);
                 let target =
-                    vault_save::build_target_path(&vault_path, date, &photo.path, photo.size);
+                    vault_save::build_content_path(&pack_path, &photo.sha256, photo.format);
                 (*photo, target)
             })
             .collect();
 
         // Parallel file copy, collect results
-        let results: Vec<(bool, PathBuf, PathBuf)> = targets
+        let results: Vec<(bool, &PhotoFile, PathBuf)> = targets
             .par_iter()
             .filter_map(|(photo, target)| {
-                match vault_save::copy_photo_to_vault(&photo.path, target, photo.size) {
-                    Ok(did_copy) => Some((did_copy, photo.path.clone(), target.clone())),
+                match vault_save::copy_photo_to_pack(&photo.path, target) {
+                    Ok(did_copy) => Some((did_copy, *photo, target.clone())),
                     Err(_) => None,
                 }
             })
             .collect();
 
-        // Report progress sequentially (callback is not Send)
+        // Report progress + insert into manifest sequentially (callback is not Send, Connection is not Sync)
         let mut copied = 0usize;
         let mut skipped = 0usize;
-        for (did_copy, source, target) in &results {
+        for (did_copy, photo, target) in &results {
             if *did_copy {
                 copied += 1;
+                // Insert into manifest
+                let original_filename = photo
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                let exif_date = photo.exif.as_ref().and_then(|e| e.date.as_deref());
+                let camera_make = photo.exif.as_ref().and_then(|e| e.camera_make.as_deref());
+                let camera_model = photo.exif.as_ref().and_then(|e| e.camera_model.as_deref());
+                let _ = pack_manifest.insert_file(
+                    &photo.sha256,
+                    &original_filename,
+                    photo.format.as_str(),
+                    photo.size,
+                    exif_date,
+                    camera_make,
+                    camera_model,
+                );
                 if let Some(ref mut cb) = progress_cb {
                     cb(vault_save::VaultSaveProgress::Copied {
-                        source: source.clone(),
+                        source: photo.path.clone(),
                         target: target.clone(),
                     });
                 }
             } else {
                 skipped += 1;
+                // Ensure manifest entry exists for skipped (already present) files
+                if !pack_manifest.contains(&photo.sha256).unwrap_or(true) {
+                    let original_filename = photo
+                        .path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
+                    let exif_date = photo.exif.as_ref().and_then(|e| e.date.as_deref());
+                    let camera_make = photo.exif.as_ref().and_then(|e| e.camera_make.as_deref());
+                    let camera_model =
+                        photo.exif.as_ref().and_then(|e| e.camera_model.as_deref());
+                    let _ = pack_manifest.insert_file(
+                        &photo.sha256,
+                        &original_filename,
+                        photo.format.as_str(),
+                        photo.size,
+                        exif_date,
+                        camera_make,
+                        camera_model,
+                    );
+                }
                 if let Some(ref mut cb) = progress_cb {
                     cb(vault_save::VaultSaveProgress::Skipped {
-                        path: source.clone(),
+                        path: photo.path.clone(),
                     });
                 }
             }
         }
 
-        // Clean up superseded vault files (lower-quality duplicates replaced by better versions)
+        // Clean up stale pack files (entries in manifest not in desired set)
         let removed_files =
-            vault_save::cleanup_superseded_vault_files(&vault_path, &all_photos, &groups);
+            vault_save::cleanup_pack_files(&pack_path, &desired_hashes, &pack_manifest);
         let removed = removed_files.len();
         for removed_path in &removed_files {
             if let Some(ref mut cb) = progress_cb {

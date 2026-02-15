@@ -124,16 +124,16 @@ If 4 copies of the same photo exist, only 1 image is decoded instead of 4. Re-sc
 
 Files are sorted by group (source-of-truth first within each group), then ungrouped files by path. Blank separator rows visually separate groups.
 
-### Vault (Lossless Archive)
+### Pack (Lossless Archive)
 
-`photopack pack` syncs a clean, deduplicated photo library to the configured vault directory. The vault is a permanent lossless archive — even if you remove sources later, the vault keeps your best originals:
+`photopack pack` syncs a clean, deduplicated photo library to the configured pack directory using **content-addressable storage**. The pack is a permanent lossless archive — even if you remove sources later, the pack keeps your best originals:
 
-- **Deduplication** — For each duplicate group, only the source-of-truth is synced. Ungrouped photos are synced as-is.
-- **Quality upgrade** — When a higher-quality version is found in sources (e.g., RAW replaces JPEG as SOT), vault sync copies the better version and removes the superseded lower-quality file.
-- **Date-based organization** — Photos are organized into `YYYY/MM/DD/` folders based on EXIF capture date, with modification time as fallback.
-- **Collision handling** — When multiple photos share the same date and filename, a suffix (`_1`, `_2`, ...) is appended.
-- **Incremental** — Re-running `pack` skips files that already exist in the vault with the same size.
-- **Vault path persistence** — The destination is stored in the SQLite catalog and persists across sessions.
+- **Content-addressable** — Files are named by their SHA-256 hash (`{hash[..2]}/{hash}.{ext}`), providing structural deduplication and integrity verification. No collision handling needed.
+- **Embedded manifest** — A SQLite database at `.photopack/manifest.sqlite` maps hashes to metadata (original filename, format, size, EXIF data).
+- **Deduplication** — For each duplicate group, only the source-of-truth is synced. Ungrouped photos are synced as-is. Identical files produce the same hash → one pack file.
+- **Quality upgrade** — When a higher-quality format becomes SOT (e.g., RAW replaces JPEG), the new format is packed alongside. Stale entries are cleaned up via the manifest.
+- **Incremental** — Re-running `pack` skips files whose hash-named file already exists on disk.
+- **Pack path persistence** — The destination is stored in the SQLite catalog and persists across sessions.
 
 ### HEIC Export (macOS)
 
@@ -180,7 +180,8 @@ photopack/
 │   │   │   │   ├── mod.rs      # Pipeline orchestration, BK-tree, sequential shot filter, merge
 │   │   │   │   └── confidence.rs # Hamming distance thresholds
 │   │   │   ├── ranking.rs      # Source-of-truth election
-│   │   │   ├── vault_save.rs   # Vault sync logic (date org, dedup, parallel copy)
+│   │   │   ├── vault_save.rs   # Pack sync logic (content-addressable, parallel copy)
+│   │   │   ├── manifest.rs     # Embedded manifest (SQLite, hash→metadata)
 │   │   │   └── export.rs       # HEIC export via macOS sips
 │   │   └── tests/
 │   │       └── vault_e2e.rs    # 124 end-to-end integration tests
@@ -226,20 +227,3 @@ cargo test --workspace
 cargo clippy --workspace
 ```
 
-### Test Coverage
-
-367 tests across 28 CLI + 215 core library + 124 end-to-end:
-
-- **Matching** (104 tests) — All 4 phases individually and combined. Sequential shot filter (burst detection, boundary cases, cross-format interaction, mixed with true duplicates). Dual-hash consensus (accept/reject matrix). EXIF filtering (camera model, date presence, phash validation). Cross-format grouping (HEIC/RAW without phash, HIGH threshold). BK-tree distance thresholds. Merge safeguards (cross-group visual validation, pure subsets, bridge photos). Transitive merge chains. Full pipeline scenarios (iPhone original+export+HEIC triplets, recompressed JPEGs, renamed files, 10-photo batch, sequential shots among true duplicates).
-- **CLI dashboard** (28 tests) — format_size, source_display_name, StatusData, is_duplicate, vault_eligible, compute_aggregates, compute_source_stats, sort_photos_for_display
-- **Catalog** (26 tests) — CRUD operations, format/confidence roundtrip, mtime tracking, config persistence, source removal, perceptual hash invalidation
-- **Vault sync** (23 tests) — Date parsing, EXIF/mtime fallback, photo selection, collision handling, incremental copy, quality upgrade with superseded file cleanup
-- **Export** (21 tests) — build_export_path (all format extensions, collision, skip, no-extension), export_photo_to_heic (skip/convert), convert_to_heic (parent dirs, invalid source, output validation, quality effect), sips availability
-- **Perceptual hash** (17 tests) — Hamming distance, manual aHash/dHash computation, real JPEG/PNG hashing, EXIF orientation (identity, 90 CW, 180, 90 CCW)
-- **Scanner** (11 tests) — Directory walk, format filtering, nested directories (deep nesting, multiple levels, siblings, symlinks)
-- **Domain** (5 tests) — Quality tiers, format support, confidence ordering
-- **EXIF** (5 tests) — Edge cases, missing data, non-image files
-- **SHA-256** (4 tests) — Consistency, empty files, error handling
-- **Ranking** (3 tests) — Format preference, size tiebreak, mtime tiebreak
-- **Confidence** (2 tests) — Hamming distance to confidence mapping, confidence combination
-- **E2E** (124 tests) — Full vault lifecycle, cross-directory and cross-format duplicates, incremental scan, source-of-truth election, source removal (with group cleanup), vault auto-registration as source, photos API, quality preservation (all format tier combinations: CR2>JPEG, DNG>JPEG, CR2>HEIC, TIFF>JPEG, PNG>HEIC, JPEG>HEIC, vault as source preserves RAW, vault replaces lower-quality on resync), nested directories (multi-level, cross-source, incremental), stale file cleanup (deleted files, all deleted, cross-source, group member removal), phash version tracking (cache invalidation, mtime reset, recomputation), vault sync (deduplication, date structure, incremental skip, quality upgrade with superseded file cleanup, progress events, error cases, file integrity), HEIC export (JPEG/PNG conversion, multi-source, nested dirs, dedup, cross-source dedup, incremental skip+rescan, independent from vault sync, progress events, config persistence, error handling, file validity)

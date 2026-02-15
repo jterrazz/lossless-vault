@@ -2,8 +2,9 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::domain::{DuplicateGroup, PhotoFile};
+use crate::domain::{DuplicateGroup, PhotoFile, PhotoFormat};
 use crate::error::Result;
+use crate::manifest::Manifest;
 
 /// Progress callback events for the vault save operation.
 pub enum VaultSaveProgress {
@@ -11,9 +12,9 @@ pub enum VaultSaveProgress {
     Start { total: usize },
     /// A file was copied.
     Copied { source: PathBuf, target: PathBuf },
-    /// A file was skipped (already exists with same size).
+    /// A file was skipped (already exists).
     Skipped { path: PathBuf },
-    /// A superseded file was removed from the vault (replaced by higher-quality version).
+    /// A stale file was removed from the pack.
     Removed { path: PathBuf },
     /// Save completed.
     Complete {
@@ -59,54 +60,13 @@ pub fn date_for_photo(photo: &PhotoFile) -> (u32, u32, u32) {
     (dt.year() as u32, dt.month(), dt.day())
 }
 
-/// Build the target path: vault_path/YYYY/MM/DD/filename.ext
-/// Handles filename collisions by appending _1, _2, etc.
-/// If a file already exists with a matching size, returns that path (enables incremental skip).
-pub fn build_target_path(
-    vault_path: &Path,
-    date: (u32, u32, u32),
-    original_path: &Path,
-    expected_size: u64,
-) -> PathBuf {
-    let (year, month, day) = date;
-    let dir = vault_path
-        .join(format!("{:04}", year))
-        .join(format!("{:02}", month))
-        .join(format!("{:02}", day));
-
-    let file_stem = original_path
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy();
-    let ext = original_path
-        .extension()
-        .unwrap_or_default()
-        .to_string_lossy();
-
-    let base_name = if ext.is_empty() {
-        file_stem.to_string()
-    } else {
-        format!("{}.{}", file_stem, ext)
-    };
-
-    let mut target = dir.join(&base_name);
-    let mut counter = 1u32;
-    while target.exists() {
-        // If existing file matches expected size, this is our file (incremental skip)
-        if let Ok(meta) = target.metadata() {
-            if meta.len() == expected_size {
-                return target;
-            }
-        }
-        target = if ext.is_empty() {
-            dir.join(format!("{}_{}", file_stem, counter))
-        } else {
-            dir.join(format!("{}_{}.{}", file_stem, counter, ext))
-        };
-        counter += 1;
-    }
-
-    target
+/// Build a content-addressable path: `pack_path/{sha256[..2]}/{sha256}.{ext}`
+/// Pure function — no I/O, no collision handling needed.
+pub fn build_content_path(pack_path: &Path, sha256: &str, format: PhotoFormat) -> PathBuf {
+    let prefix = &sha256[..2];
+    pack_path
+        .join(prefix)
+        .join(format!("{}.{}", sha256, format.extension()))
 }
 
 /// Determine which photos to save to the vault:
@@ -138,64 +98,12 @@ pub fn select_photos_to_export<'a>(
         .collect()
 }
 
-/// Remove superseded vault files: group members that live inside the vault directory
-/// and are NOT the source-of-truth. These are lower-quality versions that have been
-/// replaced by a higher-quality source-of-truth.
-/// Returns the list of removed file paths.
-pub fn cleanup_superseded_vault_files(
-    vault_path: &Path,
-    all_photos: &[PhotoFile],
-    groups: &[DuplicateGroup],
-) -> Vec<PathBuf> {
-    let vault_canonical = vault_path
-        .canonicalize()
-        .unwrap_or_else(|_| vault_path.to_path_buf());
-
-    let photo_map: std::collections::HashMap<i64, &PhotoFile> =
-        all_photos.iter().map(|p| (p.id, p)).collect();
-
-    let mut removed = Vec::new();
-    for group in groups {
-        for member in &group.members {
-            if member.id == group.source_of_truth_id {
-                continue;
-            }
-            let member_canonical = member
-                .path
-                .canonicalize()
-                .unwrap_or_else(|_| member.path.clone());
-            if member_canonical.starts_with(&vault_canonical) {
-                // Verify the SOT is NOT also in the vault (avoid removing if both are in vault)
-                if let Some(sot) = photo_map.get(&group.source_of_truth_id) {
-                    let sot_canonical = sot
-                        .path
-                        .canonicalize()
-                        .unwrap_or_else(|_| sot.path.clone());
-                    // Only remove if SOT exists outside the vault, or SOT is a different
-                    // (higher-quality) file also being synced to the vault
-                    if sot_canonical == member_canonical {
-                        continue; // SOT and member are the same file
-                    }
-                }
-                if fs::remove_file(&member.path).is_ok() {
-                    removed.push(member.path.clone());
-                }
-            }
-        }
-    }
-
-    removed
-}
-
-/// Copy a single file to the target path, creating parent directories as needed.
-/// Returns Ok(false) if skipped (file exists with same size), Ok(true) if copied.
-pub fn copy_photo_to_vault(source: &Path, target: &Path, expected_size: u64) -> Result<bool> {
+/// Copy a single file to a content-addressed target path.
+/// Returns Ok(false) if skipped (file already exists — content-addressed: existence = correct).
+/// Returns Ok(true) if copied.
+pub fn copy_photo_to_pack(source: &Path, target: &Path) -> Result<bool> {
     if target.exists() {
-        if let Ok(metadata) = target.metadata() {
-            if metadata.len() == expected_size {
-                return Ok(false);
-            }
-        }
+        return Ok(false);
     }
 
     if let Some(parent) = target.parent() {
@@ -204,6 +112,58 @@ pub fn copy_photo_to_vault(source: &Path, target: &Path, expected_size: u64) -> 
 
     fs::copy(source, target)?;
     Ok(true)
+}
+
+/// Remove pack files whose hashes are not in `desired_hashes`.
+/// Queries the manifest for all entries, removes stale files from disk and manifest.
+/// Returns the list of removed file paths.
+pub fn cleanup_pack_files(
+    pack_path: &Path,
+    desired_hashes: &HashSet<String>,
+    manifest: &Manifest,
+) -> Vec<PathBuf> {
+    let entries = match manifest.list_entries() {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut removed = Vec::new();
+    for (sha256, format_str) in &entries {
+        if !desired_hashes.contains(sha256.as_str()) {
+            // Reconstruct format from string to get extension
+            let ext = format_str_to_extension(format_str);
+            let prefix = &sha256[..2];
+            let file_path = pack_path
+                .join(prefix)
+                .join(format!("{}.{}", sha256, ext));
+            if fs::remove_file(&file_path).is_ok() {
+                removed.push(file_path);
+            }
+            let _ = manifest.remove(sha256);
+        }
+    }
+
+    removed
+}
+
+/// Map a format string (as stored in manifest) back to file extension.
+fn format_str_to_extension(format_str: &str) -> &str {
+    match format_str {
+        "CR2" => "cr2",
+        "CR3" => "cr3",
+        "NEF" => "nef",
+        "ARW" => "arw",
+        "ORF" => "orf",
+        "RAF" => "raf",
+        "RW2" => "rw2",
+        "DNG" => "dng",
+        "TIFF" => "tiff",
+        "PNG" => "png",
+        "JPEG" => "jpg",
+        "HEIC" => "heic",
+        "WebP" => "webp",
+        other => other,
+    }
 }
 
 #[cfg(test)]
@@ -328,77 +288,6 @@ mod tests {
         assert!(!ids.contains(&2), "non-SoT group member should be excluded");
     }
 
-    // ── build_target_path ───────────────────────────────────────
-
-    #[test]
-    fn test_build_target_path_basic() {
-        let vault = PathBuf::from("/vault");
-        let target =
-            build_target_path(&vault, (2024, 6, 15), Path::new("/source/photo.jpg"), 1000);
-        assert_eq!(target, PathBuf::from("/vault/2024/06/15/photo.jpg"));
-    }
-
-    #[test]
-    fn test_build_target_path_zero_padding() {
-        let vault = PathBuf::from("/vault");
-        let target = build_target_path(&vault, (2024, 1, 5), Path::new("/source/img.png"), 1000);
-        assert_eq!(target, PathBuf::from("/vault/2024/01/05/img.png"));
-    }
-
-    #[test]
-    fn test_build_target_path_collision_different_size() {
-        let tmp = tempfile::tempdir().unwrap();
-        let vault = tmp.path();
-        let date_dir = vault.join("2024/06/15");
-        fs::create_dir_all(&date_dir).unwrap();
-
-        // Create an existing file with 5 bytes
-        fs::write(date_dir.join("photo.jpg"), b"hello").unwrap();
-
-        // Build path for a file with a different size (1000) — should get _1 suffix
-        let target =
-            build_target_path(vault, (2024, 6, 15), Path::new("/source/photo.jpg"), 1000);
-        assert_eq!(
-            target.file_name().unwrap().to_string_lossy(),
-            "photo_1.jpg"
-        );
-    }
-
-    #[test]
-    fn test_build_target_path_collision_same_size_returns_existing() {
-        let tmp = tempfile::tempdir().unwrap();
-        let vault = tmp.path();
-        let date_dir = vault.join("2024/06/15");
-        fs::create_dir_all(&date_dir).unwrap();
-
-        // Create an existing file with 5 bytes
-        fs::write(date_dir.join("photo.jpg"), b"hello").unwrap();
-
-        // Build path for a file with matching size (5) — should return existing path
-        let target = build_target_path(vault, (2024, 6, 15), Path::new("/source/photo.jpg"), 5);
-        assert_eq!(target.file_name().unwrap().to_string_lossy(), "photo.jpg");
-    }
-
-    #[test]
-    fn test_build_target_path_multiple_collisions() {
-        let tmp = tempfile::tempdir().unwrap();
-        let vault = tmp.path();
-        let date_dir = vault.join("2024/01/01");
-        fs::create_dir_all(&date_dir).unwrap();
-
-        // Create photo.jpg, photo_1.jpg, photo_2.jpg — all different sizes
-        fs::write(date_dir.join("photo.jpg"), b"a").unwrap();
-        fs::write(date_dir.join("photo_1.jpg"), b"ab").unwrap();
-        fs::write(date_dir.join("photo_2.jpg"), b"abc").unwrap();
-
-        let target =
-            build_target_path(vault, (2024, 1, 1), Path::new("/source/photo.jpg"), 9999);
-        assert_eq!(
-            target.file_name().unwrap().to_string_lossy(),
-            "photo_3.jpg"
-        );
-    }
-
     // ── date_for_photo edge cases ───────────────────────────────
 
     #[test]
@@ -494,57 +383,73 @@ mod tests {
         assert!(selected.is_empty());
     }
 
-    // ── copy_photo_to_vault ─────────────────────────────────────
+    // ── build_content_path ──────────────────────────────────────
 
     #[test]
-    fn test_copy_photo_creates_dirs_and_copies() {
+    fn test_build_content_path_basic() {
+        let pack = PathBuf::from("/pack");
+        let sha = "a3b1c9e8f7001122334455667788990011223344556677889900aabbccddeeff";
+        let target = build_content_path(&pack, sha, PhotoFormat::Jpeg);
+        assert_eq!(
+            target,
+            PathBuf::from("/pack/a3/a3b1c9e8f7001122334455667788990011223344556677889900aabbccddeeff.jpg")
+        );
+    }
+
+    #[test]
+    fn test_build_content_path_different_formats() {
+        let pack = PathBuf::from("/pack");
+        let sha = "a3b1c9e8f7001122334455667788990011223344556677889900aabbccddeeff";
+
+        let cr2_path = build_content_path(&pack, sha, PhotoFormat::Cr2);
+        let jpg_path = build_content_path(&pack, sha, PhotoFormat::Jpeg);
+        let png_path = build_content_path(&pack, sha, PhotoFormat::Png);
+
+        assert!(cr2_path.to_string_lossy().ends_with(".cr2"));
+        assert!(jpg_path.to_string_lossy().ends_with(".jpg"));
+        assert!(png_path.to_string_lossy().ends_with(".png"));
+
+        // Same prefix directory
+        assert_eq!(cr2_path.parent(), jpg_path.parent());
+    }
+
+    // ── copy_photo_to_pack ──────────────────────────────────────
+
+    #[test]
+    fn test_copy_photo_to_pack_creates_prefix_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("source.jpg");
         fs::write(&source, b"photo data").unwrap();
 
-        let target = tmp.path().join("deep/nested/dir/target.jpg");
-        let result = copy_photo_to_vault(&source, &target, 1000).unwrap();
+        let target = tmp.path().join("a3/abcdef1234.jpg");
+        let result = copy_photo_to_pack(&source, &target).unwrap();
         assert!(result, "should copy when target doesn't exist");
         assert!(target.exists());
         assert_eq!(fs::read(&target).unwrap(), b"photo data");
     }
 
     #[test]
-    fn test_copy_photo_skips_same_size() {
+    fn test_copy_photo_to_pack_skips_existing() {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("source.jpg");
-        fs::write(&source, b"photo data").unwrap(); // 10 bytes
+        fs::write(&source, b"photo data").unwrap();
 
         let target = tmp.path().join("target.jpg");
-        fs::write(&target, b"old  data!").unwrap(); // also 10 bytes
+        fs::write(&target, b"existing content").unwrap();
 
-        let result = copy_photo_to_vault(&source, &target, 10).unwrap();
-        assert!(!result, "should skip when sizes match");
+        let result = copy_photo_to_pack(&source, &target).unwrap();
+        assert!(!result, "should skip when target exists (content-addressed)");
         // Content should NOT be overwritten
-        assert_eq!(fs::read(&target).unwrap(), b"old  data!");
+        assert_eq!(fs::read(&target).unwrap(), b"existing content");
     }
 
     #[test]
-    fn test_copy_photo_overwrites_different_size() {
-        let tmp = tempfile::tempdir().unwrap();
-        let source = tmp.path().join("source.jpg");
-        fs::write(&source, b"new photo data").unwrap(); // 14 bytes
-
-        let target = tmp.path().join("target.jpg");
-        fs::write(&target, b"old").unwrap(); // 3 bytes
-
-        let result = copy_photo_to_vault(&source, &target, 14).unwrap();
-        assert!(result, "should copy when sizes differ");
-        assert_eq!(fs::read(&target).unwrap(), b"new photo data");
-    }
-
-    #[test]
-    fn test_copy_photo_source_not_found() {
+    fn test_copy_photo_to_pack_source_not_found() {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("nonexistent.jpg");
         let target = tmp.path().join("target.jpg");
 
-        let result = copy_photo_to_vault(&source, &target, 1000);
+        let result = copy_photo_to_pack(&source, &target);
         assert!(result.is_err());
     }
 }
