@@ -1660,6 +1660,35 @@ fn test_vault_path_persists_across_reopen() {
 }
 
 #[test]
+fn test_vault_set_auto_registers_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vault_dir = tmp.path().join("vault");
+    fs::create_dir_all(&vault_dir).unwrap();
+
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.set_vault_path(&vault_dir).unwrap();
+
+    let sources = vault.sources().unwrap();
+    assert_eq!(sources.len(), 1, "Vault should be auto-registered as source");
+    assert_eq!(sources[0].path, vault_dir.canonicalize().unwrap());
+}
+
+#[test]
+fn test_vault_set_already_registered_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vault_dir = tmp.path().join("vault");
+    fs::create_dir_all(&vault_dir).unwrap();
+
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&vault_dir).unwrap();
+    // Setting vault to same path should not error
+    vault.set_vault_path(&vault_dir).unwrap();
+
+    let sources = vault.sources().unwrap();
+    assert_eq!(sources.len(), 1, "Should still have exactly 1 source");
+}
+
+#[test]
 fn test_vault_save_empty_catalog() {
     let tmp = tempfile::tempdir().unwrap();
     let vault_dir = tmp.path().join("vault");

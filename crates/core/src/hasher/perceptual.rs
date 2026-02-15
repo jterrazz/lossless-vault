@@ -2,8 +2,10 @@ use std::path::Path;
 
 use img_hash::{HasherConfig, HashAlg};
 
-/// Compute perceptual hash (pHash) and difference hash (dHash) for an image.
-/// Returns (phash, dhash) as u64 values, or None if the image cannot be processed.
+/// Compute average hash (aHash, via `Mean` algorithm) and difference hash (dHash) for an image.
+/// The aHash is stored in the `phash` field for historical reasons.
+/// Returns (ahash, dhash) as u64 values, or None if the image cannot be processed.
+/// Both hashes are 8x8 = 64-bit. Matching requires dual-hash consensus (both within threshold).
 pub fn compute_perceptual_hashes(path: &Path) -> Option<(u64, u64)> {
     // Try img_hash's image crate first (supports JPEG, PNG, etc.)
     let img = img_hash::image::open(path).ok().or_else(|| {

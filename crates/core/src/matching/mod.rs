@@ -103,23 +103,63 @@ pub fn find_duplicates(photos: &[PhotoFile]) -> Vec<MatchGroup> {
         }
     }
 
-    // Phase 2: EXIF triangulation + pHash validation → NearCertain/High
+    // Phase 2: EXIF triangulation + perceptual hash validation → NearCertain/High
     // Note: we do NOT exclude SHA-256 grouped IDs here — EXIF groups may
     // overlap with SHA groups (e.g. same photo in different formats), and
     // Phase 4 will merge them.
     let empty_set = HashSet::new();
     let exif_groups = group_by_exif(photos, &empty_set);
-    for mut group in exif_groups {
-        // Try to validate with pHash — if at least one pair validates, upgrade
-        // to High confidence. Otherwise keep at NearCertain (EXIF-only).
-        // Keep ALL EXIF members regardless — pHash is a confidence booster, not a filter.
-        let validated = validate_with_phash(&group.member_ids, photos);
-        if validated.len() >= 2 {
-            group.confidence = Confidence::High;
-        } else {
-            group.confidence = Confidence::NearCertain;
+    let photo_map: HashMap<i64, &PhotoFile> = photos.iter().map(|p| (p.id, p)).collect();
+    for group in exif_groups {
+        let validated = validate_with_perceptual_hash(&group.member_ids, photos);
+
+        // Filter: keep members that either (a) passed visual validation, or
+        // (b) lack perceptual hashes entirely (HEIC/RAW — EXIF is our best signal), or
+        // (c) have phash but had no comparison partner (only 1 member with phash).
+        // Remove members that HAVE hashes AND had comparison partners but FAILED.
+        let ids_with_phash: usize = group
+            .member_ids
+            .iter()
+            .filter(|&&id| {
+                photo_map
+                    .get(&id)
+                    .and_then(|p| p.phash)
+                    .is_some()
+            })
+            .count();
+        let has_comparison_partner = ids_with_phash >= 2;
+
+        let filtered: Vec<i64> = group
+            .member_ids
+            .iter()
+            .filter(|&&id| {
+                if validated.contains(&id) {
+                    return true; // visually validated
+                }
+                let has_phash = photo_map
+                    .get(&id)
+                    .and_then(|p| p.phash)
+                    .is_some();
+                if !has_phash {
+                    return true; // no phash (HEIC/RAW) — can't validate, keep
+                }
+                // Has phash but not validated — keep only if no comparison partner
+                !has_comparison_partner
+            })
+            .copied()
+            .collect();
+
+        if filtered.len() >= 2 {
+            let confidence = if validated.len() >= 2 {
+                Confidence::High
+            } else {
+                Confidence::NearCertain
+            };
+            groups.push(MatchGroup {
+                member_ids: filtered,
+                confidence,
+            });
         }
-        groups.push(group);
     }
 
     // Collect all grouped IDs for Phase 3 exclusion (perceptual-only is the fallback)
@@ -139,8 +179,8 @@ pub fn find_duplicates(photos: &[PhotoFile]) -> Vec<MatchGroup> {
         groups.push(group);
     }
 
-    // Phase 4: Merge overlapping groups
-    merge_overlapping(&mut groups)
+    // Phase 4: Merge overlapping groups (with cross-group visual validation)
+    merge_overlapping(&mut groups, photos)
 }
 
 /// Phase 1: Group photos by identical SHA-256 hash.
@@ -183,9 +223,12 @@ fn group_by_exif(photos: &[PhotoFile], excluded: &HashSet<i64>) -> Vec<MatchGrou
         .collect()
 }
 
-/// Validate a group of photo IDs using perceptual hash distance.
-/// Keeps only photos that are perceptually close to at least one other member.
-fn validate_with_phash(ids: &[i64], photos: &[PhotoFile]) -> Vec<i64> {
+/// Validate a group of photo IDs using perceptual hash distance (dual-hash consensus).
+/// Returns IDs of photos that are perceptually close to at least one other member.
+/// Uses both phash and dhash when available; falls back to phash-only at stricter threshold.
+fn validate_with_perceptual_hash(ids: &[i64], photos: &[PhotoFile]) -> HashSet<i64> {
+    use confidence::PHASH_HIGH_THRESHOLD;
+
     let photo_map: HashMap<i64, &PhotoFile> = photos.iter().map(|p| (p.id, p)).collect();
     let mut valid = HashSet::new();
 
@@ -193,8 +236,16 @@ fn validate_with_phash(ids: &[i64], photos: &[PhotoFile]) -> Vec<i64> {
         for &id_b in &ids[i + 1..] {
             if let (Some(pa), Some(pb)) = (photo_map.get(&id_a), photo_map.get(&id_b)) {
                 if let (Some(phash_a), Some(phash_b)) = (pa.phash, pb.phash) {
-                    let dist = hamming_distance(phash_a, phash_b);
-                    if confidence_from_hamming(dist).is_some() {
+                    let phash_dist = hamming_distance(phash_a, phash_b);
+                    let is_match = match (pa.dhash, pb.dhash) {
+                        (Some(da), Some(db)) => {
+                            let dhash_dist = hamming_distance(da, db);
+                            confidence_from_hamming(phash_dist).is_some()
+                                && confidence_from_hamming(dhash_dist).is_some()
+                        }
+                        _ => phash_dist <= PHASH_HIGH_THRESHOLD,
+                    };
+                    if is_match {
                         valid.insert(id_a);
                         valid.insert(id_b);
                     }
@@ -203,15 +254,22 @@ fn validate_with_phash(ids: &[i64], photos: &[PhotoFile]) -> Vec<i64> {
         }
     }
 
-    valid.into_iter().collect()
+    valid
 }
 
 /// Phase 3: Group ungrouped photos by perceptual hash similarity.
 /// Ungrouped photos are compared against ALL photos (including already-grouped
 /// ones) so that cross-format duplicates create bridge groups that Phase 4 merges.
 /// Uses a BK-tree for O(n log n) Hamming distance lookups instead of O(n²).
+///
+/// Dual-hash consensus: when both photos have phash AND dhash, both must be
+/// within threshold. When dhash is missing (cross-format), phash alone is
+/// accepted only at the stricter HIGH threshold.
 fn group_by_perceptual_hash(photos: &[PhotoFile], excluded: &HashSet<i64>) -> Vec<MatchGroup> {
-    use confidence::PHASH_PROBABLE_THRESHOLD;
+    use confidence::{PHASH_HIGH_THRESHOLD, PHASH_PROBABLE_THRESHOLD};
+
+    // Build lookup map for dhash access
+    let photo_map: HashMap<i64, &PhotoFile> = photos.iter().map(|p| (p.id, p)).collect();
 
     // Build BK-tree from ALL photos with a perceptual hash
     let mut tree = BkTree::new();
@@ -241,16 +299,38 @@ fn group_by_perceptual_hash(photos: &[PhotoFile], excluded: &HashSet<i64>) -> Ve
         let mut members = vec![photo_a.id];
         let mut worst_confidence = Confidence::Certain;
 
-        for (neighbor_id, dist) in &neighbors {
+        for (neighbor_id, phash_dist) in &neighbors {
             if *neighbor_id == photo_a.id || used.contains(neighbor_id) {
                 continue;
             }
 
-            if let Some(conf) = confidence_from_hamming(*dist) {
-                members.push(*neighbor_id);
-                if conf < worst_confidence {
-                    worst_confidence = conf;
+            let phash_conf = match confidence_from_hamming(*phash_dist) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            // Dual-hash consensus: check dhash when both photos have it
+            let neighbor = photo_map.get(neighbor_id);
+            let conf = match (photo_a.dhash, neighbor.and_then(|p| p.dhash)) {
+                (Some(da), Some(db)) => {
+                    let dhash_dist = hamming_distance(da, db);
+                    match confidence_from_hamming(dhash_dist) {
+                        Some(dc) => confidence::combine_confidence(phash_conf, dc),
+                        None => continue, // dhash too far → reject
+                    }
                 }
+                _ => {
+                    // One or both lack dhash (cross-format) — require stricter phash
+                    if *phash_dist > PHASH_HIGH_THRESHOLD {
+                        continue;
+                    }
+                    phash_conf
+                }
+            };
+
+            members.push(*neighbor_id);
+            if conf < worst_confidence {
+                worst_confidence = conf;
             }
         }
 
@@ -269,8 +349,11 @@ fn group_by_perceptual_hash(photos: &[PhotoFile], excluded: &HashSet<i64>) -> Ve
 }
 
 /// Phase 4: Merge groups that share any member IDs.
-/// Iterates until no more merges are possible (handles transitive overlaps).
-fn merge_overlapping(groups: &mut Vec<MatchGroup>) -> Vec<MatchGroup> {
+/// Before merging, validates that the groups are visually related — at least one
+/// pair of exclusive members (one from each group) must have perceptual hashes
+/// within threshold. This prevents cascading false merges through bridge photos.
+fn merge_overlapping(groups: &mut Vec<MatchGroup>, photos: &[PhotoFile]) -> Vec<MatchGroup> {
+    let photo_map: HashMap<i64, &PhotoFile> = photos.iter().map(|p| (p.id, p)).collect();
     let mut merged: Vec<MatchGroup> = Vec::new();
 
     for group in groups.drain(..) {
@@ -287,27 +370,87 @@ fn merge_overlapping(groups: &mut Vec<MatchGroup>) -> Vec<MatchGroup> {
         if overlap_indices.is_empty() {
             merged.push(group);
         } else {
-            // Merge this group and all overlapping groups into one
-            let mut combined_ids: HashSet<i64> = group_set;
-            let mut worst_confidence = group.confidence;
-
-            // Remove overlapping groups in reverse order to preserve indices
-            for &idx in overlap_indices.iter().rev() {
-                let removed = merged.remove(idx);
-                combined_ids.extend(removed.member_ids);
-                if removed.confidence < worst_confidence {
-                    worst_confidence = removed.confidence;
+            // Validate cross-group visual similarity before merging.
+            // For each overlapping group, check that at least one pair of
+            // exclusive members (one from each side) are perceptually close.
+            let mut to_merge: Vec<usize> = Vec::new();
+            for &idx in &overlap_indices {
+                if cross_group_validated(&group_set, &merged[idx], &photo_map) {
+                    to_merge.push(idx);
                 }
             }
 
-            merged.push(MatchGroup {
-                member_ids: combined_ids.into_iter().collect(),
-                confidence: worst_confidence,
-            });
+            if to_merge.is_empty() {
+                // Overlap exists but groups are visually unrelated — keep separate
+                merged.push(group);
+            } else {
+                let mut combined_ids: HashSet<i64> = group_set;
+                let mut worst_confidence = group.confidence;
+
+                for &idx in to_merge.iter().rev() {
+                    let removed = merged.remove(idx);
+                    combined_ids.extend(removed.member_ids);
+                    if removed.confidence < worst_confidence {
+                        worst_confidence = removed.confidence;
+                    }
+                }
+
+                merged.push(MatchGroup {
+                    member_ids: combined_ids.into_iter().collect(),
+                    confidence: worst_confidence,
+                });
+            }
         }
     }
 
     merged
+}
+
+/// Check if two groups have at least one pair of perceptually similar exclusive members.
+/// "Exclusive" means members not in the overlap (i.e., unique to each group).
+/// If there are no exclusive members on one side, allow the merge (pure subset).
+fn cross_group_validated(
+    new_set: &HashSet<i64>,
+    existing: &MatchGroup,
+    photo_map: &HashMap<i64, &PhotoFile>,
+) -> bool {
+    let existing_set: HashSet<i64> = existing.member_ids.iter().copied().collect();
+
+    // Members exclusive to each group
+    let new_exclusive: Vec<i64> = new_set.difference(&existing_set).copied().collect();
+    let existing_exclusive: Vec<i64> = existing_set.difference(new_set).copied().collect();
+
+    // If either side has no exclusive members, it's a pure subset — allow merge
+    if new_exclusive.is_empty() || existing_exclusive.is_empty() {
+        return true;
+    }
+
+    // If either side lacks photos with phash, can't validate — allow merge
+    let new_has_phash = new_exclusive
+        .iter()
+        .any(|id| photo_map.get(id).and_then(|p| p.phash).is_some());
+    let existing_has_phash = existing_exclusive
+        .iter()
+        .any(|id| photo_map.get(id).and_then(|p| p.phash).is_some());
+    if !new_has_phash || !existing_has_phash {
+        return true;
+    }
+
+    // Check if at least one cross-group pair is perceptually close
+    for &id_a in &new_exclusive {
+        for &id_b in &existing_exclusive {
+            if let (Some(pa), Some(pb)) = (photo_map.get(&id_a), photo_map.get(&id_b)) {
+                if let (Some(phash_a), Some(phash_b)) = (pa.phash, pb.phash) {
+                    let dist = hamming_distance(phash_a, phash_b);
+                    if confidence_from_hamming(dist).is_some() {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]
@@ -317,6 +460,15 @@ mod tests {
     use std::path::PathBuf;
 
     fn make_photo(id: i64, sha: &str, phash: Option<u64>) -> PhotoFile {
+        make_photo_full(id, sha, phash, phash) // dhash defaults to same as phash
+    }
+
+    fn make_photo_full(
+        id: i64,
+        sha: &str,
+        phash: Option<u64>,
+        dhash: Option<u64>,
+    ) -> PhotoFile {
         PhotoFile {
             id,
             source_id: 1,
@@ -325,7 +477,7 @@ mod tests {
             format: PhotoFormat::Jpeg,
             sha256: sha.to_string(),
             phash,
-            dhash: None,
+            dhash,
             exif: None,
             mtime: 1000,
         }
@@ -473,6 +625,46 @@ mod tests {
     }
 
     #[test]
+    fn test_dual_hash_consensus_rejects_single_hash_match() {
+        // phash close (distance 1) but dhash far → should NOT group
+        let photos = vec![
+            make_photo_full(1, "aaa", Some(0b1111_0000), Some(0)),
+            make_photo_full(2, "bbb", Some(0b1111_0001), Some(u64::MAX)),
+        ];
+
+        let groups = find_duplicates(&photos);
+        assert!(groups.is_empty(), "Dual-hash: close phash + far dhash should reject");
+    }
+
+    #[test]
+    fn test_dual_hash_consensus_accepts_when_both_close() {
+        // Both phash and dhash close → should group
+        let photos = vec![
+            make_photo_full(1, "aaa", Some(0b1111_0000), Some(0b1010_0000)),
+            make_photo_full(2, "bbb", Some(0b1111_0001), Some(0b1010_0001)),
+        ];
+
+        let groups = find_duplicates(&photos);
+        assert_eq!(groups.len(), 1, "Dual-hash: both close should group");
+    }
+
+    #[test]
+    fn test_exif_filters_visually_different_members() {
+        // 3 photos: same EXIF. Photos 1 and 2 visually similar, photo 3 visually different.
+        // Photo 3 should be filtered out.
+        let photos = vec![
+            make_photo_with_exif(1, "aaa", Some(100), "2024-01-15 12:00:00", "Canon R5"),
+            make_photo_with_exif(2, "bbb", Some(101), "2024-01-15 12:00:00", "Canon R5"),
+            make_photo_with_exif(3, "ccc", Some(u64::MAX), "2024-01-15 12:00:00", "Canon R5"),
+        ];
+
+        let groups = find_duplicates(&photos);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].member_ids.len(), 2, "Visually different member should be filtered");
+        assert!(!groups[0].member_ids.contains(&3));
+    }
+
+    #[test]
     fn test_no_phash_no_exif_no_sha_match() {
         // Completely different photos with no pHash
         let photos = vec![
@@ -488,6 +680,12 @@ mod tests {
 
     #[test]
     fn test_merge_overlapping_groups() {
+        // All photos have close phash so cross-group validation passes
+        let photos = vec![
+            make_photo(1, "a", Some(100)),
+            make_photo(2, "b", Some(101)),
+            make_photo(3, "c", Some(102)),
+        ];
         let mut groups = vec![
             MatchGroup {
                 member_ids: vec![1, 2],
@@ -499,15 +697,20 @@ mod tests {
             },
         ];
 
-        let merged = merge_overlapping(&mut groups);
+        let merged = merge_overlapping(&mut groups, &photos);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].member_ids.len(), 3);
-        // Takes the lower confidence
         assert_eq!(merged[0].confidence, Confidence::High);
     }
 
     #[test]
     fn test_no_overlap_stays_separate() {
+        let photos = vec![
+            make_photo(1, "a", Some(100)),
+            make_photo(2, "b", Some(101)),
+            make_photo(3, "c", Some(200)),
+            make_photo(4, "d", Some(201)),
+        ];
         let mut groups = vec![
             MatchGroup {
                 member_ids: vec![1, 2],
@@ -519,7 +722,7 @@ mod tests {
             },
         ];
 
-        let merged = merge_overlapping(&mut groups);
+        let merged = merge_overlapping(&mut groups, &photos);
         assert_eq!(merged.len(), 2);
     }
 
@@ -643,8 +846,13 @@ mod tests {
 
     #[test]
     fn test_transitive_merge_three_chains() {
-        // Group A: {1,2}, Group B: {2,3}, Group C: {3,4}
-        // After merge: single group {1,2,3,4}
+        // All photos visually similar (close phash) so cross-group validation passes
+        let photos = vec![
+            make_photo(1, "a", Some(100)),
+            make_photo(2, "b", Some(101)),
+            make_photo(3, "c", Some(102)),
+            make_photo(4, "d", Some(100)),
+        ];
         let mut groups = vec![
             MatchGroup {
                 member_ids: vec![1, 2],
@@ -660,7 +868,7 @@ mod tests {
             },
         ];
 
-        let merged = merge_overlapping(&mut groups);
+        let merged = merge_overlapping(&mut groups, &photos);
         assert_eq!(merged.len(), 1, "Transitive chain should collapse to 1 group");
         assert_eq!(merged[0].member_ids.len(), 4);
         assert_eq!(merged[0].confidence, Confidence::High, "Worst confidence wins");
@@ -668,8 +876,12 @@ mod tests {
 
     #[test]
     fn test_transitive_merge_bridge_two_disjoint_groups() {
-        // Groups {1,2} and {3,4} are disjoint. Then group {2,3} bridges them.
-        // All should merge into {1,2,3,4}.
+        let photos = vec![
+            make_photo(1, "a", Some(100)),
+            make_photo(2, "b", Some(101)),
+            make_photo(3, "c", Some(102)),
+            make_photo(4, "d", Some(100)),
+        ];
         let mut groups = vec![
             MatchGroup {
                 member_ids: vec![1, 2],
@@ -685,14 +897,21 @@ mod tests {
             },
         ];
 
-        let merged = merge_overlapping(&mut groups);
+        let merged = merge_overlapping(&mut groups, &photos);
         assert_eq!(merged.len(), 1, "Bridge group should merge the two disjoint groups");
         assert_eq!(merged[0].member_ids.len(), 4);
     }
 
     #[test]
     fn test_transitive_merge_multiple_bridges() {
-        // 3 disjoint groups linked by a group that touches all of them.
+        let photos = vec![
+            make_photo(1, "a", Some(100)),
+            make_photo(2, "b", Some(101)),
+            make_photo(3, "c", Some(100)),
+            make_photo(4, "d", Some(101)),
+            make_photo(5, "e", Some(100)),
+            make_photo(6, "f", Some(101)),
+        ];
         let mut groups = vec![
             MatchGroup {
                 member_ids: vec![1, 2],
@@ -712,7 +931,7 @@ mod tests {
             },
         ];
 
-        let merged = merge_overlapping(&mut groups);
+        let merged = merge_overlapping(&mut groups, &photos);
         assert_eq!(merged.len(), 1, "Single bridge touching all groups should merge everything");
         assert_eq!(merged[0].member_ids.len(), 6);
         assert_eq!(merged[0].confidence, Confidence::Probable);
@@ -720,7 +939,14 @@ mod tests {
 
     #[test]
     fn test_merge_preserves_independent_groups() {
-        // Two completely independent chains that should NOT merge.
+        let photos = vec![
+            make_photo(1, "a", Some(100)),
+            make_photo(2, "b", Some(101)),
+            make_photo(3, "c", Some(102)),
+            make_photo(10, "d", Some(200)),
+            make_photo(11, "e", Some(201)),
+            make_photo(12, "f", Some(202)),
+        ];
         let mut groups = vec![
             MatchGroup {
                 member_ids: vec![1, 2],
@@ -740,8 +966,32 @@ mod tests {
             },
         ];
 
-        let merged = merge_overlapping(&mut groups);
+        let merged = merge_overlapping(&mut groups, &photos);
         assert_eq!(merged.len(), 2, "Two independent chains should stay separate");
+    }
+
+    #[test]
+    fn test_merge_rejects_visually_unrelated_groups() {
+        // Groups {1,2} and {2,3} share member 2, but exclusive members 1 and 3
+        // have distant phash → should NOT merge
+        let photos = vec![
+            make_photo(1, "a", Some(100)),        // close to 2
+            make_photo(2, "b", Some(101)),        // bridge
+            make_photo(3, "c", Some(u64::MAX)),   // far from 1
+        ];
+        let mut groups = vec![
+            MatchGroup {
+                member_ids: vec![1, 2],
+                confidence: Confidence::Certain,
+            },
+            MatchGroup {
+                member_ids: vec![2, 3],
+                confidence: Confidence::High,
+            },
+        ];
+
+        let merged = merge_overlapping(&mut groups, &photos);
+        assert_eq!(merged.len(), 2, "Visually unrelated groups should NOT merge");
     }
 
     // ── Full pipeline: cross-format + cross-directory ────────────────

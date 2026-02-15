@@ -216,7 +216,12 @@ impl Vault {
             return Err(Error::VaultPathNotFound(path.to_path_buf()));
         }
         self.catalog
-            .set_config("vault_path", &canonical.to_string_lossy())
+            .set_config("vault_path", &canonical.to_string_lossy())?;
+        // Auto-register vault as a scan source (idempotent)
+        match self.catalog.add_source(path) {
+            Ok(_) | Err(Error::SourceAlreadyExists(_)) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     /// Get the current vault export destination path, if set.

@@ -41,7 +41,7 @@ cargo run -p losslessvault-cli -- export
 | `lsvault catalog list` | Show full files table with roles and vault eligibility |
 | `lsvault catalog duplicates` | List all duplicate groups |
 | `lsvault catalog duplicates <id>` | Show group detail with source-of-truth marker |
-| `lsvault vault set <path>` | Set the vault directory for permanent lossless archive |
+| `lsvault vault set <path>` | Set the vault directory (auto-registers as scan source) |
 | `lsvault vault sync` | Sync deduplicated best-quality photos to the vault |
 | `lsvault export set <path>` | Set the HEIC export destination directory |
 | `lsvault export show` | Show the current export path |
@@ -55,11 +55,11 @@ The catalog defaults to `~/.losslessvault/catalog.db`. Override with `--catalog 
 
 1. **Exact match (Phase 1)** — SHA-256 hash identity groups byte-identical files across any directory. Confidence: **Certain**.
 
-2. **EXIF triangulation (Phase 2)** — Groups photos with the same capture date and camera model. If perceptual hashes confirm similarity, confidence is **High**; otherwise **Near-Certain** (EXIF-only). This catches cross-format duplicates (e.g. a JPEG export of a RAW file) when both retain EXIF metadata.
+2. **EXIF triangulation (Phase 2)** — Groups photos with the same capture date and camera model. Perceptual hashes act as a **filter**: members with hashes that fail visual validation are removed (burst shots). Members without hashes (HEIC/RAW) are kept. Confidence: **High** if visually validated, **Near-Certain** otherwise.
 
-3. **Perceptual similarity (Phase 3)** — Compares ungrouped photos against *all* photos (including already-grouped ones) using pHash/dHash Hamming distance. This bridges cross-format duplicates where one variant is already in a SHA-256 group. Confidence: **Probable** to **Near-Certain** depending on distance.
+3. **Perceptual similarity (Phase 3)** — Compares ungrouped photos against *all* photos (including already-grouped ones) using **dual-hash consensus**: both aHash and dHash must be within threshold. When one hash is missing (cross-format), only the stricter High threshold is accepted. Uses BK-tree for O(n log n) lookups. Confidence: **Probable** to **Near-Certain** depending on distance.
 
-4. **Transitive merge (Phase 4)** — Overlapping groups are merged iteratively until no overlaps remain. The merged group takes the lowest (most conservative) confidence level.
+4. **Transitive merge (Phase 4)** — Overlapping groups are merged with **cross-group visual validation**: at least one pair of exclusive members must be perceptually close. Prevents cascading false merges through bridge photos.
 
 ### Confidence Levels
 
@@ -67,13 +67,13 @@ The catalog defaults to `~/.losslessvault/catalog.db`. Override with `--catalog 
 |-------|---------|
 | Certain | Byte-identical SHA-256 |
 | Near-Certain | Strong EXIF match or very close perceptual hash (distance <= 2) |
-| High | EXIF match validated by perceptual hash (distance <= 5) |
-| Probable | Perceptual hash match (distance <= 10) |
+| High | EXIF match validated by perceptual hash (distance <= 3) |
+| Probable | Perceptual hash match (distance <= 5) |
 | Low | Weak signal (reserved for future heuristics) |
 
 ### Perceptual Hashing
 
-Perceptual hashes (pHash and dHash) are computed for formats the `image` crate can decode: **JPEG, PNG, TIFF, WebP**. Formats like HEIC and RAW are indexed by SHA-256 and EXIF but skip perceptual hashing to avoid hangs from unsupported decoders.
+Two 64-bit hashes are computed per image: **aHash** (average/mean, stored as `phash`) and **dHash** (gradient). Both must agree within threshold for a match (**dual-hash consensus**), dramatically reducing false positives. Supported formats: **JPEG, PNG, TIFF, WebP**. HEIC and RAW skip perceptual hashing (SHA-256 and EXIF only).
 
 The hasher uses `img_hash` v3 (internally `image` v0.23) with a fallback to `image` v0.25 for broader format coverage.
 
@@ -157,7 +157,7 @@ lossless-vault/
 │   │   │   ├── vault_save.rs   # Vault sync logic (date org, dedup, parallel copy)
 │   │   │   └── export.rs       # HEIC export via macOS sips
 │   │   └── tests/
-│   │       └── vault_e2e.rs    # 99 end-to-end integration tests
+│   │       └── vault_e2e.rs    # 101 end-to-end integration tests
 │   └── cli/                    # Binary crate (lsvault)
 │       └── src/
 │           ├── main.rs         # clap CLI definition
@@ -192,7 +192,7 @@ lossless-vault/
 ## Development
 
 ```bash
-# Run all tests (159 unit + 99 e2e)
+# Run all tests (163 unit + 101 e2e)
 cargo test --workspace
 
 # Lint
@@ -204,7 +204,7 @@ cargo clippy --workspace
 The test suite covers:
 
 - **Catalog** (21 tests) — CRUD operations, format/confidence roundtrip, mtime tracking, config persistence, source removal
-- **Matching** (25 tests) — All 4 phases, cross-format grouping, transitive merge, full pipeline
+- **Matching** (29 tests) — All 4 phases, dual-hash consensus, EXIF filtering, merge safeguards, cross-format grouping, transitive merge, full pipeline
 - **Catalog dashboard** (28 tests) — format_size, source_display_name, StatusData, is_duplicate, vault_eligible, compute_aggregates, compute_source_stats, sort_photos_for_display
 - **Vault sync** (23 tests) — Date parsing, EXIF/mtime fallback, photo selection, collision handling, incremental copy
 - **Export** (21 tests) — build_export_path (all format extensions, collision, skip, no-extension), export_photo_to_heic (skip/convert), convert_to_heic (parent dirs, invalid source, output validation, quality effect), sips availability
@@ -214,4 +214,4 @@ The test suite covers:
 - **SHA-256** (4 tests) — Consistency, empty files, error handling
 - **Scanner** (11 tests) — Directory walk, format filtering, nested directories (deep nesting, multiple levels, siblings, symlinks)
 - **Ranking** (3 tests) — Format preference, size tiebreak, mtime tiebreak
-- **E2E** (99 tests) — Full vault lifecycle, cross-directory and cross-format duplicates, incremental scan, source-of-truth election, source removal (with group cleanup), photos API, quality preservation (all format tier combinations, RAW > HEIC > JPEG, vault as source), nested directories (multi-level, cross-source, incremental), vault sync (deduplication, date structure, incremental skip, progress events, error cases, file integrity), HEIC export (JPEG/PNG conversion, multi-source, nested dirs, dedup, cross-source dedup, incremental skip+rescan, independent from vault sync, progress events, config persistence, error handling, file validity)
+- **E2E** (101 tests) — Full vault lifecycle, cross-directory and cross-format duplicates, incremental scan, source-of-truth election, source removal (with group cleanup), vault auto-registration as source, photos API, quality preservation (all format tier combinations, RAW > HEIC > JPEG, vault as source), nested directories (multi-level, cross-source, incremental), vault sync (deduplication, date structure, incremental skip, progress events, error cases, file integrity), HEIC export (JPEG/PNG conversion, multi-source, nested dirs, dedup, cross-source dedup, incremental skip+rescan, independent from vault sync, progress events, config persistence, error handling, file validity)

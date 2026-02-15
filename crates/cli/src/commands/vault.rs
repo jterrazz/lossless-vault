@@ -8,6 +8,7 @@ pub fn set(vault: &Vault, path: PathBuf) -> Result<()> {
     vault.set_vault_path(&path)?;
     let resolved = vault.get_vault_path()?.unwrap();
     println!("Vault path set to: {}", resolved.display());
+    println!("Vault registered as scan source.");
     Ok(())
 }
 
