@@ -25,16 +25,10 @@ enum Commands {
         #[command(subcommand)]
         action: Option<SourcesAction>,
     },
-    /// Show catalog status summary
-    Status {
-        /// Show the full files table
-        #[arg(long)]
-        files: bool,
-    },
-    /// List all duplicate groups, or show details of a specific group
-    Duplicates {
-        /// Group ID (omit to list all)
-        id: Option<i64>,
+    /// Query the catalog: status overview, file list, or duplicate groups
+    Catalog {
+        #[command(subcommand)]
+        action: Option<CatalogAction>,
     },
     /// Manage the vault: a permanent lossless archive of your best photos
     Vault {
@@ -61,6 +55,17 @@ enum SourcesAction {
     },
     /// Scan all sources for photos and find duplicates
     Scan,
+}
+
+#[derive(Subcommand)]
+enum CatalogAction {
+    /// Show the full files table with roles and vault eligibility
+    List,
+    /// List all duplicate groups, or show details of a specific group
+    Duplicates {
+        /// Group ID (omit to list all)
+        id: Option<i64>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -107,8 +112,11 @@ fn main() -> Result<()> {
             Some(SourcesAction::Add { path }) => commands::sources::add(&vault, path)?,
             Some(SourcesAction::Scan) => commands::sources::scan(&mut vault)?,
         },
-        Commands::Status { files } => commands::status::run(&vault, files)?,
-        Commands::Duplicates { id } => commands::duplicates::run(&vault, id)?,
+        Commands::Catalog { action } => match action {
+            None => commands::status::run(&vault, false)?,
+            Some(CatalogAction::List) => commands::status::run(&vault, true)?,
+            Some(CatalogAction::Duplicates { id }) => commands::duplicates::run(&vault, id)?,
+        },
         Commands::Vault { action } => match action {
             VaultAction::Set { path } => commands::vault::set(&vault, path)?,
             VaultAction::Sync => commands::vault::sync(&mut vault)?,

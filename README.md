@@ -16,9 +16,9 @@ cargo run -p losslessvault-cli -- sources add ~/Backups/Photos
 cargo run -p losslessvault-cli -- sources scan
 
 # View results
-cargo run -p losslessvault-cli -- status
-cargo run -p losslessvault-cli -- duplicates
-cargo run -p losslessvault-cli -- duplicates 1
+cargo run -p losslessvault-cli -- catalog
+cargo run -p losslessvault-cli -- catalog duplicates
+cargo run -p losslessvault-cli -- catalog duplicates 1
 
 # Sync deduplicated library to vault (preserves original formats)
 cargo run -p losslessvault-cli -- vault set ~/Vault
@@ -36,10 +36,10 @@ cargo run -p losslessvault-cli -- export
 | `lsvault sources` | List registered source directories |
 | `lsvault sources add <path>` | Register a directory as a photo source |
 | `lsvault sources scan` | Scan all sources, hash files, and find duplicates |
-| `lsvault status` | Show rich status dashboard (overview, sources, vault) |
-| `lsvault status --files` | Include full files table with roles and vault eligibility |
-| `lsvault duplicates` | List all duplicate groups |
-| `lsvault duplicates <id>` | Show group detail with source-of-truth marker |
+| `lsvault catalog` | Show rich status dashboard (overview, sources, vault) |
+| `lsvault catalog list` | Show full files table with roles and vault eligibility |
+| `lsvault catalog duplicates` | List all duplicate groups |
+| `lsvault catalog duplicates <id>` | Show group detail with source-of-truth marker |
 | `lsvault vault set <path>` | Set the vault directory for permanent lossless archive |
 | `lsvault vault sync` | Sync deduplicated best-quality photos to the vault |
 | `lsvault export set <path>` | Set the HEIC export destination directory |
@@ -88,13 +88,13 @@ Each duplicate group elects a best copy using:
 
 Rescanning skips files whose modification time (mtime) hasn't changed since the last scan. New or modified files are hashed and inserted; duplicate groups are rebuilt from scratch each scan.
 
-### Status Dashboard
+### Catalog Dashboard
 
-`lsvault status` displays a rich overview:
+`lsvault catalog` displays a rich overview:
 
 - **Overview** — Photo count, unique count, duplicate groups, disk usage, estimated savings, source count, vault path
 - **Sources table** — Per-source photo count, total size, and last scanned timestamp
-- **Files table** (`--files`) — Every file with its source name, format, size, group ID, role (Best Copy / Duplicate / Unique), and vault eligibility (checkmark)
+- **Files table** (`catalog list`) — Every file with its source name, format, size, group ID, role (Best Copy / Duplicate / Unique), and vault eligibility (checkmark)
 
 Files are sorted by group (source-of-truth first within each group), then ungrouped files by path. Blank separator rows visually separate groups.
 
@@ -164,7 +164,7 @@ lossless-vault/
 │               ├── sources.rs  # Add, scan, list sources (progress bar via indicatif)
 │               ├── status.rs   # Rich dashboard with tables (comfy-table)
 │               ├── duplicates.rs # List/detail duplicate groups
-│               ├── vault.rs    # Vault set/show/save commands
+│               ├── vault.rs    # Vault set/sync commands
 │               └── export.rs   # HEIC export set/show/run commands
 └── tests/
     └── fixtures/               # Test photo fixtures
@@ -184,7 +184,7 @@ lossless-vault/
 | `walkdir` | Recursive directory traversal |
 | `clap` (derive) | CLI argument parsing |
 | `indicatif` | Progress bars during scan |
-| `comfy-table` | UTF-8 box-drawing tables for status dashboard |
+| `comfy-table` | UTF-8 box-drawing tables for catalog dashboard |
 | `chrono` | Date handling for vault export organization |
 | `thiserror` / `anyhow` | Error handling (core / CLI) |
 
@@ -204,7 +204,7 @@ The test suite covers:
 
 - **Catalog** (18 tests) — CRUD operations, format/confidence roundtrip, mtime tracking, config persistence
 - **Matching** (25 tests) — All 4 phases, cross-format grouping, transitive merge, full pipeline
-- **Status dashboard** (28 tests) — format_size, source_display_name, StatusData, is_duplicate, vault_eligible, compute_aggregates, compute_source_stats, sort_photos_for_display
+- **Catalog dashboard** (28 tests) — format_size, source_display_name, StatusData, is_duplicate, vault_eligible, compute_aggregates, compute_source_stats, sort_photos_for_display
 - **Vault save** (23 tests) — Date parsing, EXIF/mtime fallback, photo selection, collision handling, incremental copy
 - **Export** (21 tests) — build_export_path (all format extensions, collision, skip, no-extension), export_photo_to_heic (skip/convert), convert_to_heic (parent dirs, invalid source, output validation, quality effect), sips availability
 - **Domain** (5 tests) — Quality tiers, format support, confidence ordering
