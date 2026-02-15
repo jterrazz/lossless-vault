@@ -30,11 +30,11 @@ photopack scan
 photopack status
 photopack dupes
 
-# Pack into a clean archive (original formats, date-organized)
+# Pack into a permanent lossless archive (best-quality originals, date-organized)
 photopack pack ~/PhotoArchive
 
-# Or export as HEIC (3x smaller, macOS)
-photopack pack ~/PhotosPacked --heic --quality 85
+# Or export as compressed HEIC (3x smaller, macOS)
+photopack export ~/PhotosPacked --quality 85
 ```
 
 ## CLI Commands
@@ -48,10 +48,10 @@ photopack pack ~/PhotosPacked --heic --quality 85
 | `photopack status --files` | Show full files table with roles and vault eligibility |
 | `photopack dupes` | List all duplicate groups |
 | `photopack dupes <id>` | Show group detail with source-of-truth marker |
-| `photopack pack <path>` | Set vault path and sync deduplicated best-quality photos |
+| `photopack pack <path>` | Set vault path and sync best-quality originals (lossless) |
 | `photopack pack` | Re-sync using saved vault path |
-| `photopack pack <path> --heic` | Set export path and convert to HEIC (macOS) |
-| `photopack pack --heic [--quality 85]` | Re-export using saved path with quality control |
+| `photopack export <path>` | Set export path and convert to compressed HEIC (macOS) |
+| `photopack export [--quality 85]` | Re-export using saved path with quality control |
 
 The catalog defaults to `~/.photopack/catalog.db`. Override with `--catalog <path>`.
 
@@ -137,7 +137,7 @@ Files are sorted by group (source-of-truth first within each group), then ungrou
 
 ### HEIC Export (macOS)
 
-`photopack pack --heic` converts deduplicated photos to high-quality HEIC files, mimicking macOS iCloud Photo's export behavior. Export reads from the catalog (source directories), independent from the vault:
+`photopack export` converts deduplicated photos to compressed HEIC files, mimicking macOS iCloud Photo's export behavior. Export reads from the catalog (source directories), independent from the vault:
 
 - **Full resolution** — Photos are converted at full width using macOS's native `sips` tool
 - **Quality control** — Default quality 85 (0-100 range via `--quality` flag)
@@ -191,7 +191,8 @@ photopack/
 │               ├── sources.rs  # Add, rm, scan sources (progress bar via indicatif)
 │               ├── status.rs   # Catalog dashboard with tables (comfy-table)
 │               ├── duplicates.rs # List/detail duplicate groups
-│               └── pack.rs     # Unified pack: vault sync + HEIC export
+│               ├── pack.rs     # Lossless vault archive
+│               └── export.rs   # Compressed HEIC export
 └── tests/
     └── fixtures/               # Test photo fixtures
 ```

@@ -41,7 +41,7 @@ pub enum Error {
     #[error("vault path does not exist: {}", .0.display())]
     VaultPathNotFound(PathBuf),
 
-    #[error("export path not configured — run `photopack pack <path> --heic` first")]
+    #[error("export path not configured — run `photopack export <path>` first")]
     ExportPathNotSet,
 
     #[error("export path does not exist: {}", .0.display())]

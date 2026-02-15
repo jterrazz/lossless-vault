@@ -43,14 +43,16 @@ enum Commands {
         /// Group ID (omit to list all)
         id: Option<i64>,
     },
-    /// Pack photos to a destination (lossless archive or HEIC export)
+    /// Pack best-quality originals into a permanent lossless archive
     Pack {
         /// Destination directory (saved for future runs)
         path: Option<PathBuf>,
-        /// Export as HEIC instead of lossless copy (macOS only)
-        #[arg(long)]
-        heic: bool,
-        /// HEIC quality 0-100 (requires --heic)
+    },
+    /// Export compressed HEIC photos for space savings (macOS)
+    Export {
+        /// Destination directory (saved for future runs)
+        path: Option<PathBuf>,
+        /// HEIC quality 0-100
         #[arg(long, default_value_t = 85)]
         quality: u8,
     },
@@ -78,11 +80,8 @@ fn main() -> Result<()> {
         Commands::Scan => commands::sources::scan(&mut vault)?,
         Commands::Status { files } => commands::status::run(&vault, files)?,
         Commands::Dupes { id } => commands::duplicates::run(&vault, id)?,
-        Commands::Pack {
-            path,
-            heic,
-            quality,
-        } => commands::pack::run(&mut vault, path, heic, quality)?,
+        Commands::Pack { path } => commands::pack::run(&mut vault, path)?,
+        Commands::Export { path, quality } => commands::export::run(&mut vault, path, quality)?,
     }
 
     Ok(())
