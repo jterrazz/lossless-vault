@@ -157,12 +157,12 @@ lossless-vault/
 │   │   │   ├── vault_save.rs   # Vault sync logic (date org, dedup, parallel copy)
 │   │   │   └── export.rs       # HEIC export via macOS sips
 │   │   └── tests/
-│   │       └── vault_e2e.rs    # 95 end-to-end integration tests
+│   │       └── vault_e2e.rs    # 99 end-to-end integration tests
 │   └── cli/                    # Binary crate (lsvault)
 │       └── src/
 │           ├── main.rs         # clap CLI definition
 │           └── commands/       # Subcommand handlers
-│               ├── sources.rs  # Add, scan, list sources (progress bar via indicatif)
+│               ├── sources.rs  # Add, rm, scan, list sources (progress bar via indicatif)
 │               ├── status.rs   # Catalog dashboard with tables (comfy-table)
 │               ├── duplicates.rs # List/detail duplicate groups
 │               ├── vault.rs    # Vault set/sync commands
@@ -192,7 +192,7 @@ lossless-vault/
 ## Development
 
 ```bash
-# Run all tests (159 unit + 98 e2e)
+# Run all tests (159 unit + 99 e2e)
 cargo test --workspace
 
 # Lint
@@ -214,4 +214,4 @@ The test suite covers:
 - **SHA-256** (4 tests) — Consistency, empty files, error handling
 - **Scanner** (11 tests) — Directory walk, format filtering, nested directories (deep nesting, multiple levels, siblings, symlinks)
 - **Ranking** (3 tests) — Format preference, size tiebreak, mtime tiebreak
-- **E2E** (95 tests) — Full vault lifecycle, cross-directory and cross-format duplicates, incremental scan, source-of-truth election, photos API, quality preservation (all format tier combinations, RAW > HEIC > JPEG, vault as source), nested directories (multi-level, cross-source, incremental), vault sync (deduplication, date structure, incremental skip, progress events, error cases, file integrity), HEIC export (JPEG/PNG conversion, multi-source, nested dirs, dedup, cross-source dedup, incremental skip+rescan, independent from vault sync, progress events, config persistence, error handling, file validity)
+- **E2E** (99 tests) — Full vault lifecycle, cross-directory and cross-format duplicates, incremental scan, source-of-truth election, source removal (with group cleanup), photos API, quality preservation (all format tier combinations, RAW > HEIC > JPEG, vault as source), nested directories (multi-level, cross-source, incremental), vault sync (deduplication, date structure, incremental skip, progress events, error cases, file integrity), HEIC export (JPEG/PNG conversion, multi-source, nested dirs, dedup, cross-source dedup, incremental skip+rescan, independent from vault sync, progress events, config persistence, error handling, file validity)

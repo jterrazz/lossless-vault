@@ -155,6 +155,30 @@ fn test_remove_source_cleans_up_groups() {
     assert_eq!(vault.status().unwrap().total_photos, 1);
 }
 
+#[test]
+fn test_remove_source_after_directory_deleted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let photos_dir = tmp.path().join("photos");
+    fs::create_dir_all(&photos_dir).unwrap();
+    create_jpeg(&photos_dir.join("a.jpg"), 100, 150, 200);
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let source = vault.add_source(&photos_dir).unwrap();
+    vault.scan(None).unwrap();
+
+    assert_eq!(vault.photos().unwrap().len(), 1);
+
+    // Delete the source directory from disk
+    fs::remove_dir_all(&photos_dir).unwrap();
+
+    // Should still be able to remove the source from the catalog
+    let (removed, photo_count) = vault.remove_source(&source.path).unwrap();
+    assert_eq!(removed.id, source.id);
+    assert_eq!(photo_count, 1);
+    assert_eq!(vault.sources().unwrap().len(), 0);
+    assert_eq!(vault.photos().unwrap().len(), 0);
+}
+
 // ── Vault::status (empty) ────────────────────────────────────────
 
 #[test]
