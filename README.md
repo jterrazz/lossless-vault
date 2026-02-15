@@ -55,9 +55,9 @@ The catalog defaults to `~/.losslessvault/catalog.db`. Override with `--catalog 
 
 1. **Exact match (Phase 1)** — SHA-256 hash identity groups byte-identical files across any directory. Confidence: **Certain**.
 
-2. **EXIF triangulation (Phase 2)** — Groups photos with the same capture date and camera model. Perceptual hashes act as a **filter**: members with hashes that fail visual validation are removed (burst shots). Members without hashes (HEIC/RAW) are kept. Confidence: **High** if visually validated, **Near-Certain** otherwise.
+2. **EXIF triangulation (Phase 2)** — Groups photos with the same capture date and camera model. Perceptual hashes act as a **filter**: members with hashes that fail visual validation (NEAR_CERTAIN threshold, distance > 2) are removed. This rejects burst/sequential shots that share EXIF metadata but differ visually. Members without hashes (HEIC/RAW) are kept on EXIF evidence alone. Confidence: **High** if visually validated, **Near-Certain** otherwise.
 
-3. **Perceptual similarity (Phase 3)** — Compares ungrouped photos against *all* photos (including already-grouped ones) using **dual-hash consensus**: both aHash and dHash must be within threshold. When one hash is missing (cross-format), only the stricter High threshold is accepted. Uses BK-tree for O(n log n) lookups. Confidence: **Probable** to **Near-Certain** depending on distance.
+3. **Perceptual similarity (Phase 3)** — Compares ungrouped photos against *all* photos (including already-grouped ones) using **dual-hash consensus**: both aHash and dHash must be within threshold. When one hash is missing (cross-format), only the stricter High threshold (distance <= 2) is accepted. A **sequential shot filter** rejects matches where both photos have the same camera model and EXIF dates 1-60 seconds apart (but not identical) — true duplicates always have identical EXIF dates, while burst/sequential shots differ by seconds. Uses BK-tree for O(n log n) lookups. Confidence: **Probable** to **Near-Certain** depending on distance.
 
 4. **Transitive merge (Phase 4)** — Overlapping groups are merged with **cross-group visual validation**: at least one pair of exclusive members must be perceptually close. Prevents cascading false merges through bridge photos.
 
@@ -75,7 +75,16 @@ The catalog defaults to `~/.losslessvault/catalog.db`. Override with `--catalog 
 
 Two 64-bit hashes are computed per image: **aHash** (average/mean, stored as `phash`) and **dHash** (gradient). Both must agree within threshold for a match (**dual-hash consensus**), dramatically reducing false positives. Supported formats: **JPEG, PNG, TIFF, WebP**. HEIC and RAW skip perceptual hashing (SHA-256 and EXIF only).
 
-The hasher uses a hybrid decode pipeline: **`turbojpeg`** (libjpeg-turbo, ~2-3x faster JPEG decode) for JPEG, falling back to the `image` crate for other formats. Both paths resize to 9x8 grayscale via **`fast_image_resize`** (SIMD-accelerated: SSE4.1, AVX2, NEON), then compute aHash + dHash manually from the same buffer. The `turbojpeg` feature is optional (`--no-default-features` for pure-Rust/WASM builds).
+The hasher uses a hybrid decode pipeline:
+
+- **JPEG path** — `turbojpeg` (libjpeg-turbo) decodes directly to grayscale (`GRAY` pixel format, 1 byte/pixel, skips chroma entirely). Full-resolution decode is critical — DCT scaling causes hash divergence between differently-compressed versions of the same photo.
+- **Non-JPEG path** — `image` crate decodes to RGB, resizes to 9x8 via `fast_image_resize`, then applies manual BT.601 grayscale conversion on 72 pixels.
+- **EXIF orientation** — Applied before resize on both paths. iPhone originals store landscape pixels with a rotation tag (e.g., orientation=6); iOS exports physically rotate pixels and clear the tag (orientation=1). Without orientation correction, the same photo produces completely different hashes (distance ~33/64).
+- **SIMD resize** — Both paths use `fast_image_resize` for hardware-accelerated resize (SSE4.1, AVX2, NEON) to the 9x8 target.
+
+The `turbojpeg` feature is optional (`--no-default-features` for pure-Rust/WASM builds).
+
+**Phash version tracking** — A `PHASH_VERSION` constant auto-invalidates all cached perceptual hashes when the algorithm changes. On version mismatch, the scan clears all stored hashes and resets mtimes, forcing full recomputation.
 
 ### Source-of-Truth Election
 
@@ -148,27 +157,27 @@ lossless-vault/
 ├── crates/
 │   ├── core/                   # Library crate (losslessvault-core)
 │   │   ├── src/
-│   │   │   ├── lib.rs          # Public Vault API
+│   │   │   ├── lib.rs          # Public Vault API + PHASH_VERSION tracking
 │   │   │   ├── domain.rs       # PhotoFile, PhotoFormat, DuplicateGroup, Confidence, ExifData
 │   │   │   ├── error.rs        # Error types (thiserror)
 │   │   │   ├── catalog/        # SQLite catalog (rusqlite, WAL mode)
-│   │   │   │   ├── mod.rs      # CRUD operations
+│   │   │   │   ├── mod.rs      # CRUD operations, phash invalidation, mtime reset
 │   │   │   │   └── schema.rs   # Table definitions
 │   │   │   ├── scanner/        # Recursive directory walk (walkdir)
 │   │   │   │   ├── mod.rs      # scan_directory()
 │   │   │   │   └── formats.rs  # Extension -> PhotoFormat mapping
 │   │   │   ├── hasher/         # File hashing
 │   │   │   │   ├── mod.rs      # SHA-256 (sha2)
-│   │   │   │   └── perceptual.rs # aHash/dHash (turbojpeg + fast_image_resize)
+│   │   │   │   └── perceptual.rs # aHash/dHash (turbojpeg + EXIF orientation + fast_image_resize)
 │   │   │   ├── exif.rs         # EXIF extraction (kamadak-exif)
 │   │   │   ├── matching/       # 4-phase duplicate matching pipeline
-│   │   │   │   ├── mod.rs      # Pipeline orchestration + group merge
+│   │   │   │   ├── mod.rs      # Pipeline orchestration, BK-tree, sequential shot filter, merge
 │   │   │   │   └── confidence.rs # Hamming distance thresholds
 │   │   │   ├── ranking.rs      # Source-of-truth election
 │   │   │   ├── vault_save.rs   # Vault sync logic (date org, dedup, parallel copy)
 │   │   │   └── export.rs       # HEIC export via macOS sips
 │   │   └── tests/
-│   │       └── vault_e2e.rs    # 118 end-to-end integration tests
+│   │       └── vault_e2e.rs    # 124 end-to-end integration tests
 │   └── cli/                    # Binary crate (lsvault)
 │       └── src/
 │           ├── main.rs         # clap CLI definition
@@ -204,7 +213,7 @@ lossless-vault/
 ## Development
 
 ```bash
-# Run all tests (167 unit + 118 e2e)
+# Run all tests (367 total)
 cargo test --workspace
 
 # Lint
@@ -213,17 +222,18 @@ cargo clippy --workspace
 
 ### Test Coverage
 
-The test suite covers:
+367 tests across 28 CLI + 215 core library + 124 end-to-end:
 
-- **Catalog** (21 tests) — CRUD operations, format/confidence roundtrip, mtime tracking, config persistence, source removal
-- **Matching** (33 tests) — All 4 phases, dual-hash consensus, EXIF filtering (strict NEAR_CERTAIN threshold), merge safeguards, cross-format grouping, transitive merge, sequential shot rejection, full pipeline
-- **Catalog dashboard** (28 tests) — format_size, source_display_name, StatusData, is_duplicate, vault_eligible, compute_aggregates, compute_source_stats, sort_photos_for_display
-- **Vault sync** (23 tests) — Date parsing, EXIF/mtime fallback, photo selection, collision handling, incremental copy, quality upgrade cleanup
+- **Matching** (104 tests) — All 4 phases individually and combined. Sequential shot filter (burst detection, boundary cases, cross-format interaction, mixed with true duplicates). Dual-hash consensus (accept/reject matrix). EXIF filtering (camera model, date presence, phash validation). Cross-format grouping (HEIC/RAW without phash, HIGH threshold). BK-tree distance thresholds. Merge safeguards (cross-group visual validation, pure subsets, bridge photos). Transitive merge chains. Full pipeline scenarios (iPhone original+export+HEIC triplets, recompressed JPEGs, renamed files, 10-photo batch, sequential shots among true duplicates).
+- **CLI dashboard** (28 tests) — format_size, source_display_name, StatusData, is_duplicate, vault_eligible, compute_aggregates, compute_source_stats, sort_photos_for_display
+- **Catalog** (26 tests) — CRUD operations, format/confidence roundtrip, mtime tracking, config persistence, source removal, perceptual hash invalidation
+- **Vault sync** (23 tests) — Date parsing, EXIF/mtime fallback, photo selection, collision handling, incremental copy, quality upgrade with superseded file cleanup
 - **Export** (21 tests) — build_export_path (all format extensions, collision, skip, no-extension), export_photo_to_heic (skip/convert), convert_to_heic (parent dirs, invalid source, output validation, quality effect), sips availability
-- **Domain** (5 tests) — Quality tiers, format support, confidence ordering
-- **Perceptual hash** (9 tests) — Hamming distance, manual aHash/dHash, real JPEG/PNG hashing
-- **EXIF** (5 tests) — Edge cases, missing data
-- **SHA-256** (4 tests) — Consistency, empty files, error handling
+- **Perceptual hash** (17 tests) — Hamming distance, manual aHash/dHash computation, real JPEG/PNG hashing, EXIF orientation (identity, 90 CW, 180, 90 CCW)
 - **Scanner** (11 tests) — Directory walk, format filtering, nested directories (deep nesting, multiple levels, siblings, symlinks)
+- **Domain** (5 tests) — Quality tiers, format support, confidence ordering
+- **EXIF** (5 tests) — Edge cases, missing data, non-image files
+- **SHA-256** (4 tests) — Consistency, empty files, error handling
 - **Ranking** (3 tests) — Format preference, size tiebreak, mtime tiebreak
-- **E2E** (118 tests) — Full vault lifecycle, cross-directory and cross-format duplicates, incremental scan, source-of-truth election, source removal (with group cleanup), vault auto-registration as source, photos API, quality preservation (all format tier combinations, RAW > HEIC > JPEG, vault as source), nested directories (multi-level, cross-source, incremental), vault sync (deduplication, date structure, incremental skip, quality upgrade with superseded file cleanup, progress events, error cases, file integrity), HEIC export (JPEG/PNG conversion, multi-source, nested dirs, dedup, cross-source dedup, incremental skip+rescan, independent from vault sync, progress events, config persistence, error handling, file validity)
+- **Confidence** (2 tests) — Hamming distance to confidence mapping, confidence combination
+- **E2E** (124 tests) — Full vault lifecycle, cross-directory and cross-format duplicates, incremental scan, source-of-truth election, source removal (with group cleanup), vault auto-registration as source, photos API, quality preservation (all format tier combinations: CR2>JPEG, DNG>JPEG, CR2>HEIC, TIFF>JPEG, PNG>HEIC, JPEG>HEIC, vault as source preserves RAW, vault replaces lower-quality on resync), nested directories (multi-level, cross-source, incremental), stale file cleanup (deleted files, all deleted, cross-source, group member removal), phash version tracking (cache invalidation, mtime reset, recomputation), vault sync (deduplication, date structure, incremental skip, quality upgrade with superseded file cleanup, progress events, error cases, file integrity), HEIC export (JPEG/PNG conversion, multi-source, nested dirs, dedup, cross-source dedup, incremental skip+rescan, independent from vault sync, progress events, config persistence, error handling, file validity)
