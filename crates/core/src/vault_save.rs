@@ -21,7 +21,7 @@ pub enum VaultSaveProgress {
 /// Handles both "2024-01-15 12:00:00" (display_value) and "2024:01:15 12:00:00" (raw EXIF).
 pub fn parse_exif_date(date_str: &str) -> Option<(u32, u32, u32)> {
     let date_part = date_str.split_whitespace().next()?;
-    let parts: Vec<&str> = date_part.split(|c| c == ':' || c == '-').collect();
+    let parts: Vec<&str> = date_part.split([':', '-']).collect();
     if parts.len() < 3 {
         return None;
     }
@@ -29,7 +29,7 @@ pub fn parse_exif_date(date_str: &str) -> Option<(u32, u32, u32)> {
     let month: u32 = parts[1].parse().ok()?;
     let day: u32 = parts[2].parse().ok()?;
 
-    if year < 1970 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31 {
+    if !(1970..=2100).contains(&year) || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return None;
     }
 

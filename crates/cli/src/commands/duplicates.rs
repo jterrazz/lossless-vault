@@ -17,8 +17,8 @@ fn list_groups(vault: &Vault) -> Result<()> {
     }
 
     println!(
-        "{:<6} {:<12} {:<8} {}",
-        "ID", "Confidence", "Members", "Source of Truth"
+        "{:<6} {:<12} {:<8} Source of Truth",
+        "ID", "Confidence", "Members"
     );
     println!("{}", "-".repeat(80));
 

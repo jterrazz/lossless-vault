@@ -36,10 +36,19 @@ enum Commands {
         /// Group ID (omit to list all)
         id: Option<i64>,
     },
-    /// Manage the vault export destination
+    /// Manage the vault: a permanent lossless archive of your best photos
     Vault {
         #[command(subcommand)]
         action: VaultAction,
+    },
+    /// Export optimized HEIC photos from your catalog (macOS)
+    Export {
+        #[command(subcommand)]
+        action: Option<ExportAction>,
+
+        /// HEIC quality (0-100, default: 85)
+        #[arg(long, default_value_t = 85)]
+        quality: u8,
     },
 }
 
@@ -56,28 +65,26 @@ enum SourcesAction {
 
 #[derive(Subcommand)]
 enum VaultAction {
-    /// Set the vault destination path
+    /// Set the vault directory for archiving deduplicated originals
     Set {
         /// Path to the vault directory
         path: PathBuf,
     },
     /// Show the current vault path
     Show,
-    /// Copy deduplicated best-quality photos to the vault
+    /// Archive deduplicated best-quality photos to the vault (byte-for-byte copies)
     Save,
-    /// Set the export destination path for HEIC conversion
-    ExportSet {
+}
+
+#[derive(Subcommand)]
+enum ExportAction {
+    /// Set the export destination directory
+    Set {
         /// Path to the export directory
         path: PathBuf,
     },
-    /// Show the current export path
-    ExportShow,
-    /// Export deduplicated photos as HEIC files (macOS only)
-    Export {
-        /// HEIC quality (0-100, default: 85)
-        #[arg(long, default_value_t = 85)]
-        quality: u8,
-    },
+    /// Show the current export destination
+    Show,
 }
 
 fn default_catalog_path() -> String {
@@ -108,9 +115,11 @@ fn main() -> Result<()> {
             VaultAction::Set { path } => commands::vault::set(&vault, path)?,
             VaultAction::Show => commands::vault::show(&vault)?,
             VaultAction::Save => commands::vault::save(&mut vault)?,
-            VaultAction::ExportSet { path } => commands::vault::export_set(&vault, path)?,
-            VaultAction::ExportShow => commands::vault::export_show(&vault)?,
-            VaultAction::Export { quality } => commands::vault::export(&vault, quality)?,
+        },
+        Commands::Export { action, quality } => match action {
+            Some(ExportAction::Set { path }) => commands::export::set(&vault, path)?,
+            Some(ExportAction::Show) => commands::export::show(&vault)?,
+            None => commands::export::run(&vault, quality)?,
         },
     }
 

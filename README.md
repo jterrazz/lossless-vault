@@ -25,8 +25,8 @@ cargo run -p losslessvault-cli -- vault set ~/Vault
 cargo run -p losslessvault-cli -- vault save
 
 # Export as HEIC (macOS — like iCloud Photo export)
-cargo run -p losslessvault-cli -- vault export-set ~/Export
-cargo run -p losslessvault-cli -- vault export
+cargo run -p losslessvault-cli -- export set ~/Export
+cargo run -p losslessvault-cli -- export
 ```
 
 ## CLI Commands
@@ -40,12 +40,12 @@ cargo run -p losslessvault-cli -- vault export
 | `lsvault status --files` | Include full files table with roles and vault eligibility |
 | `lsvault duplicates` | List all duplicate groups |
 | `lsvault duplicates <id>` | Show group detail with source-of-truth marker |
-| `lsvault vault set <path>` | Set the vault export destination directory |
+| `lsvault vault set <path>` | Set the vault directory for permanent lossless archive |
 | `lsvault vault show` | Show the current vault path |
-| `lsvault vault save` | Copy deduplicated best-quality photos to the vault |
-| `lsvault vault export-set <path>` | Set the HEIC export destination directory |
-| `lsvault vault export-show` | Show the current export path |
-| `lsvault vault export [--quality 85]` | Convert deduplicated photos to HEIC (macOS) |
+| `lsvault vault save` | Archive deduplicated best-quality photos to the vault |
+| `lsvault export set <path>` | Set the HEIC export destination directory |
+| `lsvault export show` | Show the current export path |
+| `lsvault export [--quality 85]` | Convert deduplicated photos to HEIC (macOS) |
 
 The catalog defaults to `~/.losslessvault/catalog.db`. Override with `--catalog <path>`.
 
@@ -99,9 +99,9 @@ Rescanning skips files whose modification time (mtime) hasn't changed since the 
 
 Files are sorted by group (source-of-truth first within each group), then ungrouped files by path. Blank separator rows visually separate groups.
 
-### Vault Export
+### Vault (Lossless Archive)
 
-`lsvault vault save` copies a clean, deduplicated photo library to the configured vault directory:
+`lsvault vault save` archives a clean, deduplicated photo library to the configured vault directory. The vault is a permanent lossless archive — even if you remove sources later, the vault keeps your best originals:
 
 - **Deduplication** — For each duplicate group, only the source-of-truth is exported. Ungrouped photos are exported as-is.
 - **Date-based organization** — Photos are organized into `YYYY/MM/DD/` folders based on EXIF capture date, with modification time as fallback.
@@ -111,7 +111,7 @@ Files are sorted by group (source-of-truth first within each group), then ungrou
 
 ### HEIC Export (macOS)
 
-`lsvault vault export` converts deduplicated photos to high-quality HEIC files, mimicking macOS iCloud Photo's export behavior:
+`lsvault export` converts deduplicated photos to high-quality HEIC files, mimicking macOS iCloud Photo's export behavior. Export reads from the catalog (source directories), independent from the vault:
 
 - **Full resolution** — Photos are converted at full width using macOS's native `sips` tool
 - **Quality control** — Default quality 85 (0-100 range via `--quality` flag)
@@ -165,7 +165,8 @@ lossless-vault/
 │               ├── sources.rs  # Add, scan, list sources (progress bar via indicatif)
 │               ├── status.rs   # Rich dashboard with tables (comfy-table)
 │               ├── duplicates.rs # List/detail duplicate groups
-│               └── vault.rs    # Vault set/show/save + export commands
+│               ├── vault.rs    # Vault set/show/save commands
+│               └── export.rs   # HEIC export set/show/run commands
 └── tests/
     └── fixtures/               # Test photo fixtures
 ```

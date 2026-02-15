@@ -12,7 +12,7 @@ pub fn list(vault: &Vault) -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<4} {:<60} {}", "ID", "Path", "Last Scanned");
+    println!("{:<4} {:<60} Last Scanned", "ID", "Path");
     println!("{}", "-".repeat(80));
 
     for source in &sources {

@@ -31,7 +31,7 @@ cargo clippy --workspace
 - **EXIF matching keeps all members**: pHash validation in Phase 2 is a confidence booster, not a filter. All EXIF-matched members stay in the group even if they lack pHash.
 - **Transitive merge**: Phase 4 finds ALL overlapping groups per iteration and merges them, handling chains like A↔B, B↔C correctly.
 - **Incremental scan**: Files are skipped if their mtime hasn't changed. Groups are rebuilt from scratch each scan.
-- **HEIC export via sips**: Uses macOS `sips` command for HEIC conversion (zero dependencies). Separate export path from vault save. Skip by file existence (not size, since conversion changes size). `#[cfg(target_os = "macos")]` gates for e2e tests.
+- **HEIC export via sips**: Uses macOS `sips` command for HEIC conversion (zero dependencies). Export is a top-level CLI command (`lsvault export`), independent from vault. Reads from catalog (source directories), not the vault. Skip by file existence (not size, since conversion changes size). `#[cfg(target_os = "macos")]` gates for e2e tests.
 
 ## Testing
 

@@ -39,12 +39,12 @@ fn test_vault_open_reopen_persists() {
     fs::create_dir_all(&photos_dir).unwrap();
 
     {
-        let mut vault = Vault::open(&db_path).unwrap();
+        let vault = Vault::open(&db_path).unwrap();
         vault.add_source(&photos_dir).unwrap();
     }
 
     // Reopen — source should still be there
-    let mut vault = Vault::open(&db_path).unwrap();
+    let vault = Vault::open(&db_path).unwrap();
     let sources = vault.sources().unwrap();
     assert_eq!(sources.len(), 1);
 }
@@ -57,7 +57,7 @@ fn test_add_source_valid_directory() {
     let photos_dir = tmp.path().join("photos");
     fs::create_dir_all(&photos_dir).unwrap();
 
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     let source = vault.add_source(&photos_dir).unwrap();
     assert_eq!(source.path, photos_dir.canonicalize().unwrap());
 }
@@ -65,7 +65,7 @@ fn test_add_source_valid_directory() {
 #[test]
 fn test_add_source_nonexistent_path() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     let err = vault.add_source(Path::new("/nonexistent/path")).unwrap_err();
     assert!(err.to_string().contains("does not exist"));
@@ -77,7 +77,7 @@ fn test_add_source_file_not_directory() {
     let file_path = tmp.path().join("file.txt");
     fs::write(&file_path, b"not a dir").unwrap();
 
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     let err = vault.add_source(&file_path).unwrap_err();
     assert!(err.to_string().contains("not a directory"));
 }
@@ -88,7 +88,7 @@ fn test_add_source_duplicate_rejected() {
     let photos_dir = tmp.path().join("photos");
     fs::create_dir_all(&photos_dir).unwrap();
 
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     assert!(vault.add_source(&photos_dir).is_err());
 }
@@ -98,7 +98,7 @@ fn test_add_source_duplicate_rejected() {
 #[test]
 fn test_status_empty_catalog() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     let stats = vault.status().unwrap();
     assert_eq!(stats.total_sources, 0);
@@ -263,7 +263,7 @@ fn test_group_detail() {
 #[test]
 fn test_group_not_found() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     let err = vault.group(999).unwrap_err();
     assert!(err.to_string().contains("not found"));
@@ -738,7 +738,7 @@ fn test_cross_directory_duplicates_source_of_truth_in_group() {
 #[test]
 fn test_photos_api_empty_catalog() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     let photos = vault.photos().unwrap();
     assert!(photos.is_empty());
@@ -1353,7 +1353,7 @@ fn test_vault_set_and_get_path() {
     let vault_dir = tmp.path().join("my_vault");
     fs::create_dir_all(&vault_dir).unwrap();
 
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     assert!(vault.get_vault_path().unwrap().is_none());
 
     vault.set_vault_path(&vault_dir).unwrap();
@@ -1520,7 +1520,7 @@ fn test_vault_save_incremental_skips_existing() {
 #[test]
 fn test_vault_set_nonexistent_path_errors() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     let err = vault
         .set_vault_path(&tmp.path().join("does_not_exist"))
@@ -1534,7 +1534,7 @@ fn test_vault_set_file_not_directory_errors() {
     let file_path = tmp.path().join("file.txt");
     fs::write(&file_path, b"not a dir").unwrap();
 
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     let err = vault.set_vault_path(&file_path).unwrap_err();
     assert!(err.to_string().contains("does not exist"));
 }
@@ -1547,7 +1547,7 @@ fn test_vault_set_overwrite_path() {
     fs::create_dir_all(&dir_a).unwrap();
     fs::create_dir_all(&dir_b).unwrap();
 
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.set_vault_path(&dir_a).unwrap();
     vault.set_vault_path(&dir_b).unwrap();
 
@@ -1563,12 +1563,12 @@ fn test_vault_path_persists_across_reopen() {
     fs::create_dir_all(&vault_dir).unwrap();
 
     {
-        let mut vault = Vault::open(&db_path).unwrap();
+        let vault = Vault::open(&db_path).unwrap();
         vault.set_vault_path(&vault_dir).unwrap();
     }
 
     // Reopen — vault path should persist
-    let mut vault = Vault::open(&db_path).unwrap();
+    let vault = Vault::open(&db_path).unwrap();
     let stored = vault.get_vault_path().unwrap().unwrap();
     assert_eq!(stored, vault_dir.canonicalize().unwrap());
 }
@@ -1986,7 +1986,7 @@ fn test_export_set_and_get_path() {
     let export_dir = tmp.path().join("export");
     fs::create_dir_all(&export_dir).unwrap();
 
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     // Initially unset
     assert!(vault.get_export_path().unwrap().is_none());
@@ -2005,7 +2005,7 @@ fn test_export_set_overwrite_path() {
     fs::create_dir_all(&dir1).unwrap();
     fs::create_dir_all(&dir2).unwrap();
 
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.set_export_path(&dir1).unwrap();
     vault.set_export_path(&dir2).unwrap();
 
@@ -2016,7 +2016,7 @@ fn test_export_set_overwrite_path() {
 #[test]
 fn test_export_set_nonexistent_path_errors() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     let err = vault
         .set_export_path(Path::new("/nonexistent/export/path"))
@@ -2027,7 +2027,7 @@ fn test_export_set_nonexistent_path_errors() {
 #[test]
 fn test_export_path_not_set_errors() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     let err = vault.export(85, None).unwrap_err();
     // On macOS this hits SipsNotAvailable or ExportPathNotSet depending on order
@@ -2042,7 +2042,7 @@ fn test_export_path_not_set_errors() {
 #[test]
 fn test_export_path_not_set_errors_macos() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     let err = vault.export(85, None).unwrap_err();
     assert!(err.to_string().contains("export path not configured"));
@@ -2237,7 +2237,7 @@ fn test_export_deleted_export_path_errors() {
     let export_dir = tmp.path().join("export");
     fs::create_dir_all(&export_dir).unwrap();
 
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.set_export_path(&export_dir).unwrap();
 
     // Delete the export directory after setting it
@@ -2367,7 +2367,7 @@ fn test_export_empty_catalog_succeeds() {
     let export_dir = tmp.path().join("export");
     fs::create_dir_all(&export_dir).unwrap();
 
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.set_export_path(&export_dir).unwrap();
 
     use losslessvault_core::export::ExportProgress;
@@ -2624,7 +2624,7 @@ fn test_export_set_file_not_directory_errors() {
     let file_path = tmp.path().join("not_a_dir.txt");
     fs::write(&file_path, b"i am a file").unwrap();
 
-    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     let err = vault.set_export_path(&file_path).unwrap_err();
     assert!(err.to_string().contains("does not exist"));
 }
@@ -2637,12 +2637,12 @@ fn test_export_path_persists_across_reopen() {
     let db_path = tmp.path().join("catalog.db");
 
     {
-        let mut vault = Vault::open(&db_path).unwrap();
+        let vault = Vault::open(&db_path).unwrap();
         vault.set_export_path(&export_dir).unwrap();
     }
 
     // Reopen vault and verify path persisted
-    let mut vault = Vault::open(&db_path).unwrap();
+    let vault = Vault::open(&db_path).unwrap();
     let retrieved = vault.get_export_path().unwrap().unwrap();
     assert_eq!(retrieved, export_dir.canonicalize().unwrap());
 }

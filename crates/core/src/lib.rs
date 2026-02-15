@@ -71,10 +71,7 @@ impl Vault {
             let files_to_process: Vec<&ScannedFile> = scanned_files
                 .iter()
                 .filter(|sf| {
-                    match self.catalog.get_photo_mtime(&sf.path) {
-                        Ok(Some(existing_mtime)) if existing_mtime == sf.mtime => false,
-                        _ => true,
-                    }
+                    !matches!(self.catalog.get_photo_mtime(&sf.path), Ok(Some(existing_mtime)) if existing_mtime == sf.mtime)
                 })
                 .collect();
 
