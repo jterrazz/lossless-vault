@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
-use losslessvault_core::domain::{DuplicateGroup, PhotoFile, Source};
-use losslessvault_core::Vault;
+use photopack_core::domain::{DuplicateGroup, PhotoFile, Source};
+use photopack_core::Vault;
 
 /// Precomputed lookup data for rendering the status dashboard.
 struct StatusData {
@@ -120,7 +120,7 @@ pub fn run(vault: &Vault, show_files: bool) -> Result<()> {
 
     // Overview
     println!();
-    println!("  LosslessVault Status");
+    println!("  Photopack Status");
     println!("  ====================");
     println!();
     println!("  Overview");
@@ -373,7 +373,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use losslessvault_core::domain::{Confidence, PhotoFormat};
+    use photopack_core::domain::{Confidence, PhotoFormat};
 
     // ── format_size ─────────────────────────────────────────────────
 

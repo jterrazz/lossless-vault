@@ -2,13 +2,13 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use losslessvault_core::{ScanProgress, Vault};
+use photopack_core::{ScanProgress, Vault};
 
 pub fn list(vault: &Vault) -> Result<()> {
     let sources = vault.sources()?;
 
     if sources.is_empty() {
-        println!("No sources registered. Run `lsvault sources add <path>` to add one.");
+        println!("No sources registered. Run `photopack sources add <path>` to add one.");
         return Ok(());
     }
 

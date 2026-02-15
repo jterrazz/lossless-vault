@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
-use losslessvault_core::{vault_save::VaultSaveProgress, Vault};
+use photopack_core::{vault_save::VaultSaveProgress, Vault};
 
 pub fn set(vault: &Vault, path: PathBuf) -> Result<()> {
     vault.set_vault_path(&path)?;

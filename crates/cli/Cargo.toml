@@ -1,14 +1,14 @@
 [package]
-name = "losslessvault-cli"
+name = "photopack-cli"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "lsvault"
+name = "photopack"
 path = "src/main.rs"
 
 [dependencies]
-losslessvault-core = { path = "../core" }
+photopack-core = { path = "../core" }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 indicatif = "0.17"

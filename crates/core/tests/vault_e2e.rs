@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use losslessvault_core::Vault;
+use photopack_core::Vault;
 
 /// Create a JPEG with a gradient pattern seeded by (r, g, b) to ensure distinct perceptual hashes.
 fn create_jpeg(path: &Path, r: u8, g: u8, b: u8) {
@@ -267,7 +267,7 @@ fn test_scan_exact_duplicates() {
     assert_eq!(groups[0].members.len(), 2);
     assert_eq!(
         groups[0].confidence,
-        losslessvault_core::domain::Confidence::Certain
+        photopack_core::domain::Confidence::Certain
     );
 }
 
@@ -441,22 +441,22 @@ fn test_scan_with_progress_callback() {
     vault
         .scan(Some(&mut |progress| {
             match &progress {
-                losslessvault_core::ScanProgress::SourceStart { file_count, .. } => {
+                photopack_core::ScanProgress::SourceStart { file_count, .. } => {
                     events.push(format!("start:{file_count}"));
                 }
-                losslessvault_core::ScanProgress::FileHashed { .. } => {
+                photopack_core::ScanProgress::FileHashed { .. } => {
                     events.push("hashed".to_string());
                 }
-                losslessvault_core::ScanProgress::AnalysisStart { count } => {
+                photopack_core::ScanProgress::AnalysisStart { count } => {
                     events.push(format!("analysis_start:{count}"));
                 }
-                losslessvault_core::ScanProgress::AnalysisDone { .. } => {
+                photopack_core::ScanProgress::AnalysisDone { .. } => {
                     events.push("analysis_done".to_string());
                 }
-                losslessvault_core::ScanProgress::FilesRemoved { count } => {
+                photopack_core::ScanProgress::FilesRemoved { count } => {
                     events.push(format!("removed:{count}"));
                 }
-                losslessvault_core::ScanProgress::PhaseComplete { phase } => {
+                photopack_core::ScanProgress::PhaseComplete { phase } => {
                     events.push(format!("phase:{phase}"));
                 }
             }
@@ -924,7 +924,7 @@ fn test_source_of_truth_prefers_png_over_jpeg() {
 
     assert_eq!(
         sot.format,
-        losslessvault_core::domain::PhotoFormat::Png,
+        photopack_core::domain::PhotoFormat::Png,
         "PNG should be elected source-of-truth over JPEG"
     );
 }
@@ -1470,7 +1470,7 @@ fn test_raw_cr2_elected_sot_over_jpeg() {
         .unwrap();
     assert_eq!(
         sot.format,
-        losslessvault_core::domain::PhotoFormat::Cr2,
+        photopack_core::domain::PhotoFormat::Cr2,
         "CR2 (RAW) must be elected SOT over JPEG"
     );
 }
@@ -1497,7 +1497,7 @@ fn test_raw_dng_elected_sot_over_jpeg() {
         .unwrap();
     assert_eq!(
         sot.format,
-        losslessvault_core::domain::PhotoFormat::Dng,
+        photopack_core::domain::PhotoFormat::Dng,
         "DNG (RAW) must be elected SOT over JPEG"
     );
 }
@@ -1525,7 +1525,7 @@ fn test_raw_elected_sot_over_heic() {
         .unwrap();
     assert_eq!(
         sot.format,
-        losslessvault_core::domain::PhotoFormat::Cr2,
+        photopack_core::domain::PhotoFormat::Cr2,
         "CR2 (RAW) must be elected SOT over HEIC"
     );
 }
@@ -1552,7 +1552,7 @@ fn test_tiff_elected_sot_over_jpeg() {
         .unwrap();
     assert_eq!(
         sot.format,
-        losslessvault_core::domain::PhotoFormat::Tiff,
+        photopack_core::domain::PhotoFormat::Tiff,
         "TIFF (lossless) must be elected SOT over JPEG"
     );
 }
@@ -1580,7 +1580,7 @@ fn test_png_elected_sot_over_heic() {
         .unwrap();
     assert_eq!(
         sot.format,
-        losslessvault_core::domain::PhotoFormat::Png,
+        photopack_core::domain::PhotoFormat::Png,
         "PNG (lossless) must be elected SOT over HEIC"
     );
 }
@@ -1607,7 +1607,7 @@ fn test_jpeg_elected_sot_over_heic() {
         .unwrap();
     assert_eq!(
         sot.format,
-        losslessvault_core::domain::PhotoFormat::Jpeg,
+        photopack_core::domain::PhotoFormat::Jpeg,
         "JPEG must be elected SOT over HEIC"
     );
 }
@@ -1646,7 +1646,7 @@ fn test_three_sources_quality_ladder_raw_wins() {
         .unwrap();
     assert_eq!(
         sot.format,
-        losslessvault_core::domain::PhotoFormat::Cr2,
+        photopack_core::domain::PhotoFormat::Cr2,
         "CR2 must win over HEIC and JPEG"
     );
 }
@@ -1715,7 +1715,7 @@ fn test_vault_as_source_preserves_raw_original() {
         .iter()
         .find(|m| m.id == groups[0].source_of_truth_id)
         .unwrap();
-    assert_eq!(sot.format, losslessvault_core::domain::PhotoFormat::Cr2);
+    assert_eq!(sot.format, photopack_core::domain::PhotoFormat::Cr2);
 
     // Vault save should export the RAW into date-organized structure
     vault.set_vault_path(&vault_dir).unwrap();
@@ -1852,7 +1852,7 @@ fn test_vault_save_incremental_with_cross_format_group() {
     let mut first_copied = 0;
     vault
         .vault_save(Some(&mut |progress| {
-            if let losslessvault_core::vault_save::VaultSaveProgress::Complete {
+            if let photopack_core::vault_save::VaultSaveProgress::Complete {
                 copied, ..
             } = progress
             {
@@ -1867,7 +1867,7 @@ fn test_vault_save_incremental_with_cross_format_group() {
     let mut second_copied = 0;
     vault
         .vault_save(Some(&mut |progress| {
-            if let losslessvault_core::vault_save::VaultSaveProgress::Complete {
+            if let photopack_core::vault_save::VaultSaveProgress::Complete {
                 copied,
                 skipped,
                 ..
@@ -1911,7 +1911,7 @@ fn test_all_raw_formats_beat_jpeg() {
             .unwrap();
         assert_ne!(
             sot.format,
-            losslessvault_core::domain::PhotoFormat::Jpeg,
+            photopack_core::domain::PhotoFormat::Jpeg,
             ".{ext} must be elected SOT over JPEG"
         );
     }
@@ -2068,7 +2068,7 @@ fn test_vault_save_incremental_skips_existing() {
     let mut first_copied = 0;
     vault
         .vault_save(Some(&mut |progress| {
-            if let losslessvault_core::vault_save::VaultSaveProgress::Complete {
+            if let photopack_core::vault_save::VaultSaveProgress::Complete {
                 copied, ..
             } = progress
             {
@@ -2082,7 +2082,7 @@ fn test_vault_save_incremental_skips_existing() {
     let mut second_skipped = 0;
     vault
         .vault_save(Some(&mut |progress| {
-            if let losslessvault_core::vault_save::VaultSaveProgress::Complete {
+            if let photopack_core::vault_save::VaultSaveProgress::Complete {
                 skipped, ..
             } = progress
             {
@@ -2197,10 +2197,10 @@ fn test_vault_save_empty_catalog() {
     vault
         .vault_save(Some(&mut |progress| {
             match progress {
-                losslessvault_core::vault_save::VaultSaveProgress::Start { total: t } => {
+                photopack_core::vault_save::VaultSaveProgress::Start { total: t } => {
                     total = t;
                 }
-                losslessvault_core::vault_save::VaultSaveProgress::Complete { copied: c, skipped: s, .. } => {
+                photopack_core::vault_save::VaultSaveProgress::Complete { copied: c, skipped: s, .. } => {
                     copied = c;
                     skipped = s;
                 }
@@ -2352,19 +2352,19 @@ fn test_vault_save_progress_events_order() {
     vault
         .vault_save(Some(&mut |progress| {
             match progress {
-                losslessvault_core::vault_save::VaultSaveProgress::Start { total } => {
+                photopack_core::vault_save::VaultSaveProgress::Start { total } => {
                     events.push(format!("start:{total}"));
                 }
-                losslessvault_core::vault_save::VaultSaveProgress::Copied { .. } => {
+                photopack_core::vault_save::VaultSaveProgress::Copied { .. } => {
                     events.push("copied".to_string());
                 }
-                losslessvault_core::vault_save::VaultSaveProgress::Skipped { .. } => {
+                photopack_core::vault_save::VaultSaveProgress::Skipped { .. } => {
                     events.push("skipped".to_string());
                 }
-                losslessvault_core::vault_save::VaultSaveProgress::Removed { .. } => {
+                photopack_core::vault_save::VaultSaveProgress::Removed { .. } => {
                     events.push("removed".to_string());
                 }
-                losslessvault_core::vault_save::VaultSaveProgress::Complete {
+                photopack_core::vault_save::VaultSaveProgress::Complete {
                     copied,
                     skipped,
                     removed,
@@ -2646,7 +2646,7 @@ fn test_vault_sync_replaces_lower_quality_with_raw() {
         .unwrap();
     assert_eq!(
         sot.format,
-        losslessvault_core::domain::PhotoFormat::Cr2,
+        photopack_core::domain::PhotoFormat::Cr2,
         "CR2 should be elected SOT over JPEG"
     );
 
@@ -2655,7 +2655,7 @@ fn test_vault_sync_replaces_lower_quality_with_raw() {
     let mut copied_count = 0;
     vault
         .vault_save(Some(&mut |progress| {
-            if let losslessvault_core::vault_save::VaultSaveProgress::Complete {
+            if let photopack_core::vault_save::VaultSaveProgress::Complete {
                 copied,
                 removed,
                 ..
@@ -2807,10 +2807,10 @@ fn test_vault_sync_quality_upgrade_reports_removed_count() {
     let mut events = Vec::new();
     vault
         .vault_save(Some(&mut |progress| match progress {
-            losslessvault_core::vault_save::VaultSaveProgress::Removed { .. } => {
+            photopack_core::vault_save::VaultSaveProgress::Removed { .. } => {
                 events.push("removed".to_string());
             }
-            losslessvault_core::vault_save::VaultSaveProgress::Complete {
+            photopack_core::vault_save::VaultSaveProgress::Complete {
                 removed, ..
             } => {
                 events.push(format!("complete_removed:{removed}"));
@@ -2978,7 +2978,7 @@ fn test_export_skips_existing() {
     vault.set_export_path(&export_dir).unwrap();
 
     // First export
-    use losslessvault_core::export::ExportProgress;
+    use photopack_core::export::ExportProgress;
     let mut first_converted = 0;
     vault
         .export(
@@ -3059,7 +3059,7 @@ fn test_export_progress_events_order() {
     vault.scan(None).unwrap();
     vault.set_export_path(&export_dir).unwrap();
 
-    use losslessvault_core::export::ExportProgress;
+    use photopack_core::export::ExportProgress;
     let mut events = Vec::new();
     vault
         .export(
@@ -3221,7 +3221,7 @@ fn test_export_empty_catalog_succeeds() {
     let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.set_export_path(&export_dir).unwrap();
 
-    use losslessvault_core::export::ExportProgress;
+    use photopack_core::export::ExportProgress;
     let mut total = 999;
     let mut converted = 999;
     vault
@@ -3298,7 +3298,7 @@ fn test_export_after_rescan_includes_new_photos() {
     create_jpeg(&photos_dir.join("second.jpg"), 200, 50, 175);
     vault.scan(None).unwrap();
 
-    use losslessvault_core::export::ExportProgress;
+    use photopack_core::export::ExportProgress;
     let mut converted = 0;
     let mut skipped = 0;
     vault
@@ -3438,7 +3438,7 @@ fn test_export_converted_event_has_correct_paths() {
     vault.scan(None).unwrap();
     vault.set_export_path(&export_dir).unwrap();
 
-    use losslessvault_core::export::ExportProgress;
+    use photopack_core::export::ExportProgress;
     let mut source_path = PathBuf::new();
     let mut target_path = PathBuf::new();
     vault
@@ -3603,7 +3603,7 @@ fn test_scan_invalidates_hashes_on_version_change() {
 
     // Simulate an old phash_version by writing a different value directly
     {
-        let catalog = losslessvault_core::catalog::Catalog::open(&db_path).unwrap();
+        let catalog = photopack_core::catalog::Catalog::open(&db_path).unwrap();
         catalog.set_config("phash_version", "OLD_VERSION").unwrap();
     }
 
@@ -3655,7 +3655,7 @@ fn test_scan_invalidates_stale_hashes_and_regroups_duplicates() {
 
     // Poison hashes: set a stale version so next scan invalidates
     {
-        let catalog = losslessvault_core::catalog::Catalog::open(&db_path).unwrap();
+        let catalog = photopack_core::catalog::Catalog::open(&db_path).unwrap();
         catalog.set_config("phash_version", "STALE").unwrap();
         // Corrupt the cached hashes to simulate algorithm change
         catalog.clear_perceptual_hashes().unwrap();
@@ -3685,7 +3685,7 @@ fn test_scan_first_run_sets_phash_version() {
 
     // Before scan, no phash_version in config
     {
-        let catalog = losslessvault_core::catalog::Catalog::open(&db_path).unwrap();
+        let catalog = photopack_core::catalog::Catalog::open(&db_path).unwrap();
         assert!(catalog.get_config("phash_version").unwrap().is_none());
     }
 
@@ -3693,7 +3693,7 @@ fn test_scan_first_run_sets_phash_version() {
 
     // After scan, phash_version should be set
     {
-        let catalog = losslessvault_core::catalog::Catalog::open(&db_path).unwrap();
+        let catalog = photopack_core::catalog::Catalog::open(&db_path).unwrap();
         let version = catalog.get_config("phash_version").unwrap();
         assert!(version.is_some(), "scan should set phash_version in config");
     }
@@ -3719,7 +3719,7 @@ fn test_scan_version_mismatch_clears_all_hashes_before_recompute() {
 
     // Simulate old version
     {
-        let catalog = losslessvault_core::catalog::Catalog::open(&db_path).unwrap();
+        let catalog = photopack_core::catalog::Catalog::open(&db_path).unwrap();
         catalog.set_config("phash_version", "1").unwrap();
     }
 

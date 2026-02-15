@@ -1,53 +1,63 @@
-# LosslessVault
+# photopack
 
-A Rust-powered photo deduplication engine. Scan local folders, identify duplicates via SHA-256, perceptual hashing, and EXIF triangulation, then elect a source-of-truth per group. Export a clean, deduplicated photo library organized by date. Everything is persisted in a local SQLite catalog.
+Pack your photo library tight. Deduplicate, organize, compress.
+
+Your photos are a mess. Same shot saved as iPhone HEIC, Lightroom JPEG, and a RAW backup. Copies in iCloud, on a USB drive, and in ~/old-photos. After a few years, 30-50% of your library is redundant — and you're paying for iCloud storage you don't need.
+
+**photopack** scans all your sources, finds every duplicate across formats, keeps the highest-quality version, and packs everything into a clean date-organized archive. Export to HEIC and it's 3x smaller. Zero quality loss.
+
+### Use cases
+
+- **All your photos in one place** — Point photopack at iCloud, Lightroom exports, camera imports, old backups. It merges everything into a single deduplicated archive organized by date.
+- **Cut your iCloud bill** — Your 200GB library is full of duplicates you can't see — same photo as RAW + JPEG + HEIC across folders. photopack finds them all and exports a clean HEIC library that's 3x smaller.
+- **Smart cross-format dedup** — Not just byte-matching. SHA-256, perceptual hashing, and EXIF metadata catch duplicates across RAW, JPEG, HEIC, PNG, TIFF, and WebP — even when file sizes and formats are completely different.
 
 ## Quick Start
 
 ```bash
-# Build
-cargo build --workspace
+# Install
+cargo install photopack
 
-# Add photo directories
-cargo run -p losslessvault-cli -- sources add ~/Photos
-cargo run -p losslessvault-cli -- sources add ~/Backups/Photos
+# Point it at your photo sources
+photopack sources add ~/Photos
+photopack sources add ~/iCloud
+photopack sources add /Volumes/Backup/Photos
 
-# Scan for duplicates
-cargo run -p losslessvault-cli -- sources scan
+# Scan — finds all duplicates across formats
+photopack scan
 
-# View results
-cargo run -p losslessvault-cli -- catalog
-cargo run -p losslessvault-cli -- catalog duplicates
-cargo run -p losslessvault-cli -- catalog duplicates 1
+# See what it found
+photopack catalog
+photopack catalog duplicates
 
-# Sync deduplicated library to vault (preserves original formats)
-cargo run -p losslessvault-cli -- vault set ~/Vault
-cargo run -p losslessvault-cli -- vault sync
+# Pack into a clean archive (original formats, date-organized)
+photopack vault set ~/PhotoArchive
+photopack vault sync
 
-# Export as HEIC (macOS — like iCloud Photo export)
-cargo run -p losslessvault-cli -- export set ~/Export
-cargo run -p losslessvault-cli -- export
+# Or export as HEIC (3x smaller, macOS)
+photopack export set ~/PhotosPacked
+photopack export --quality 85
 ```
 
 ## CLI Commands
 
 | Command | Description |
 |---------|-------------|
-| `lsvault sources` | List registered source directories |
-| `lsvault sources add <path>` | Register a directory as a photo source |
-| `lsvault sources scan` | Scan all sources, hash files, and find duplicates |
-| `lsvault sources rm <path>` | Unregister a source and remove its photos from the catalog |
-| `lsvault catalog` | Show catalog dashboard (overview, sources, vault) |
-| `lsvault catalog list` | Show full files table with roles and vault eligibility |
-| `lsvault catalog duplicates` | List all duplicate groups |
-| `lsvault catalog duplicates <id>` | Show group detail with source-of-truth marker |
-| `lsvault vault set <path>` | Set the vault directory (auto-registers as scan source) |
-| `lsvault vault sync` | Sync deduplicated best-quality photos to the vault |
-| `lsvault export set <path>` | Set the HEIC export destination directory |
-| `lsvault export show` | Show the current export path |
-| `lsvault export [--quality 85]` | Convert deduplicated photos to HEIC (macOS) |
+| `photopack sources` | List registered source directories |
+| `photopack sources add <path>` | Register a directory as a photo source |
+| `photopack sources scan` | Scan all sources, hash files, and find duplicates |
+| `photopack sources rm <path>` | Unregister a source and remove its photos from the catalog |
+| `photopack catalog` | Show catalog dashboard (overview, sources, vault) |
+| `photopack catalog list` | Show full files table with roles and vault eligibility |
+| `photopack catalog duplicates` | List all duplicate groups |
+| `photopack catalog duplicates <id>` | Show group detail with source-of-truth marker |
+| `photopack vault set <path>` | Set the vault directory (auto-registers as scan source) |
+| `photopack vault sync` | Sync deduplicated best-quality photos to the vault |
+| `photopack export set <path>` | Set the HEIC export destination directory |
+| `photopack export show` | Show the current export path |
+| `photopack export [--quality 85]` | Convert deduplicated photos to HEIC (macOS) |
 
-The catalog defaults to `~/.losslessvault/catalog.db`. Override with `--catalog <path>`.
+The catalog defaults to `~/.photopack/catalog.db`. Override with `--catalog <path>`.
 
 ## How It Works
 
@@ -110,7 +120,7 @@ If 4 copies of the same photo exist, only 1 image is decoded instead of 4. Re-sc
 
 ### Catalog Dashboard
 
-`lsvault catalog` displays a rich overview:
+`photopack catalog` displays a rich overview:
 
 - **Overview** — Photo count, unique count, duplicate groups, disk usage, estimated savings, source count, vault path
 - **Sources table** — Per-source photo count, total size, and last scanned timestamp
@@ -120,7 +130,7 @@ Files are sorted by group (source-of-truth first within each group), then ungrou
 
 ### Vault (Lossless Archive)
 
-`lsvault vault sync` syncs a clean, deduplicated photo library to the configured vault directory. The vault is a permanent lossless archive — even if you remove sources later, the vault keeps your best originals:
+`photopack vault sync` syncs a clean, deduplicated photo library to the configured vault directory. The vault is a permanent lossless archive — even if you remove sources later, the vault keeps your best originals:
 
 - **Deduplication** — For each duplicate group, only the source-of-truth is synced. Ungrouped photos are synced as-is.
 - **Quality upgrade** — When a higher-quality version is found in sources (e.g., RAW replaces JPEG as SOT), vault sync copies the better version and removes the superseded lower-quality file.
@@ -131,7 +141,7 @@ Files are sorted by group (source-of-truth first within each group), then ungrou
 
 ### HEIC Export (macOS)
 
-`lsvault export` converts deduplicated photos to high-quality HEIC files, mimicking macOS iCloud Photo's export behavior. Export reads from the catalog (source directories), independent from the vault:
+`photopack export` converts deduplicated photos to high-quality HEIC files, mimicking macOS iCloud Photo's export behavior. Export reads from the catalog (source directories), independent from the vault:
 
 - **Full resolution** — Photos are converted at full width using macOS's native `sips` tool
 - **Quality control** — Default quality 85 (0-100 range via `--quality` flag)
@@ -152,10 +162,10 @@ Files are sorted by group (source-of-truth first within each group), then ungrou
 ## Architecture
 
 ```
-lossless-vault/
+photopack/
 ├── Cargo.toml                  # Workspace root
 ├── crates/
-│   ├── core/                   # Library crate (losslessvault-core)
+│   ├── core/                   # Library crate (photopack-core)
 │   │   ├── src/
 │   │   │   ├── lib.rs          # Public Vault API + PHASH_VERSION tracking
 │   │   │   ├── domain.rs       # PhotoFile, PhotoFormat, DuplicateGroup, Confidence, ExifData
@@ -178,7 +188,7 @@ lossless-vault/
 │   │   │   └── export.rs       # HEIC export via macOS sips
 │   │   └── tests/
 │   │       └── vault_e2e.rs    # 124 end-to-end integration tests
-│   └── cli/                    # Binary crate (lsvault)
+│   └── cli/                    # Binary crate (photopack)
 │       └── src/
 │           ├── main.rs         # clap CLI definition
 │           └── commands/       # Subcommand handlers

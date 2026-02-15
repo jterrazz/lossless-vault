@@ -1,5 +1,5 @@
 use anyhow::Result;
-use losslessvault_core::Vault;
+use photopack_core::Vault;
 
 pub fn run(vault: &Vault, id: Option<i64>) -> Result<()> {
     match id {
@@ -12,7 +12,7 @@ fn list_groups(vault: &Vault) -> Result<()> {
     let groups = vault.groups()?;
 
     if groups.is_empty() {
-        println!("No duplicates found. Run `lsvault sources scan` first.");
+        println!("No duplicates found. Run `photopack sources scan` first.");
         return Ok(());
     }
 

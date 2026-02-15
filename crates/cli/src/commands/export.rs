@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
-use losslessvault_core::{export::ExportProgress, Vault};
+use photopack_core::{export::ExportProgress, Vault};
 
 pub fn set(vault: &Vault, path: PathBuf) -> Result<()> {
     vault.set_export_path(&path)?;
@@ -14,7 +14,7 @@ pub fn set(vault: &Vault, path: PathBuf) -> Result<()> {
 pub fn show(vault: &Vault) -> Result<()> {
     match vault.get_export_path()? {
         Some(path) => println!("Export path: {}", path.display()),
-        None => println!("No export path configured. Use `lsvault export set <path>` to set one."),
+        None => println!("No export path configured. Use `photopack export set <path>` to set one."),
     }
     Ok(())
 }

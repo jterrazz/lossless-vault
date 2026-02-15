@@ -1,6 +1,6 @@
-# LosslessVault
+# Photopack
 
-Rust-powered photo deduplication engine.
+Pack your photo library tight. Rust-powered photo deduplication engine.
 
 ## Build & Test
 
@@ -13,7 +13,7 @@ cargo clippy --workspace
 ## Architecture
 
 - `crates/core` — library: domain types, catalog (SQLite), scanner, hasher, EXIF, matching, ranking, export
-- `crates/cli` — binary (`lsvault`): CLI interface using clap
+- `crates/cli` — binary (`photopack`): CLI interface using clap
 
 ## Conventions
 
@@ -37,7 +37,7 @@ cargo clippy --workspace
 - **Vault quality upgrade**: During vault sync, superseded vault files (group members in the vault that are NOT the source-of-truth) are automatically removed. This ensures the vault always contains only the highest-quality version.
 - **Two-phase hashing**: Scan computes SHA-256 + EXIF first (fast, I/O-bound), then perceptual hashes only for unique SHA-256 content. Exact duplicates skip image decoding entirely; existing catalog hashes are reused. Batch mtime check replaces per-file queries.
 - **Incremental scan**: Files are skipped if their mtime hasn't changed. Files deleted from disk are removed from the catalog (`remove_photos_by_paths`). Groups are rebuilt from scratch each scan.
-- **HEIC export via sips**: Uses macOS `sips` command for HEIC conversion (zero dependencies). Export is a top-level CLI command (`lsvault export`), independent from vault. Reads from catalog (source directories), not the vault. Skip by file existence (not size, since conversion changes size). `#[cfg(target_os = "macos")]` gates for e2e tests.
+- **HEIC export via sips**: Uses macOS `sips` command for HEIC conversion (zero dependencies). Export is a top-level CLI command (`photopack export`), independent from vault. Reads from catalog (source directories), not the vault. Skip by file existence (not size, since conversion changes size). `#[cfg(target_os = "macos")]` gates for e2e tests.
 
 ## Testing
 

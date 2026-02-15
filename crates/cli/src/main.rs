@@ -4,11 +4,11 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use losslessvault_core::Vault;
+use photopack_core::Vault;
 
-/// LosslessVault — photo deduplication engine
+/// Photopack — pack your photo library tight
 #[derive(Parser)]
-#[command(name = "lsvault", version, about)]
+#[command(name = "photopack", version, about)]
 struct Cli {
     /// Path to the catalog database
     #[arg(long, default_value_t = default_catalog_path())]
@@ -102,7 +102,7 @@ fn default_catalog_path() -> String {
 fn dirs_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home)
-        .join(".losslessvault")
+        .join(".photopack")
         .join("catalog.db")
 }
 

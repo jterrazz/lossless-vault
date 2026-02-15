@@ -34,7 +34,7 @@ pub enum ScanProgress {
     PhaseComplete { phase: String },
 }
 
-/// The main entry point for the LosslessVault library.
+/// The main entry point for the Photopack library.
 pub struct Vault {
     catalog: Catalog,
 }
