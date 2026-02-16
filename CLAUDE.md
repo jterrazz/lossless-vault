@@ -33,6 +33,7 @@ cargo clippy --workspace
 - **EXIF matching filters burst shots**: Phase 2 uses perceptual hash as a strict filter (NEAR_CERTAIN threshold ≤2). Sequential/burst shots (distance 3+) are rejected. Members without phash (HEIC/RAW) are kept.
 - **Sequential shot filter (Phase 3)**: Photos from the same camera with EXIF dates 1-60 seconds apart (but not identical) are rejected as sequential/burst shots. True duplicates always have identical EXIF dates. This prevents false positives from visually similar but distinct consecutive photos that produce identical hashes at 9x8 resolution.
 - **Merge safeguards**: Phase 4 requires cross-group visual validation before merging overlapping groups. At least one pair of exclusive members must be perceptually close. Prevents cascading false merges through bridge photos.
+- **Phase 5 EXIF sweep**: After merge, ungrouped photos without perceptual hash (HEIC/RAW) are attached to existing groups if a grouped photo shares the same EXIF key (date + camera). This catches orphans left when Phase 2's strict dual-hash validation rejects an EXIF group's hashable members, orphaning the non-hashable ones.
 - **Content-addressable pack**: Pack files are named by SHA-256 hash with 2-char prefix sharding (`{hash[..2]}/{hash}.{ext}`). Deduplication is structural (same hash = same file). An embedded manifest at `.photopack/manifest.sqlite` maps hashes to metadata (original filename, format, size, EXIF). Cleanup removes entries not in the desired hash set. No collision handling needed — hash uniqueness is guaranteed.
 - **Pack auto-registers as source**: `set_vault_path` automatically registers the pack directory as a scan source (idempotent).
 - **Pack quality upgrade**: When a higher-quality format becomes SOT, the new format's hash-named file is written to the pack. Stale entries (hashes no longer in the desired set) are cleaned up via the manifest.
@@ -44,7 +45,7 @@ cargo clippy --workspace
 
 ## Testing
 
-- 384 tests total (28 CLI + 234 core + 122 e2e) — counts may vary after refactoring
+- 388 tests total (28 CLI + 238 core + 122 e2e) — counts may vary after refactoring
 - E2E tests in `crates/core/tests/vault_e2e.rs` use real JPEG/PNG generation via the `image` crate
 - Cross-format testing: use `create_file_with_jpeg_bytes()` to write JPEG bytes to `.cr2`/`.heic`/`.dng` etc. — scanner assigns format from extension, hashes work on raw bytes
 - Use structurally different patterns (gradient vs checkerboard vs stripes) in tests to ensure distinct perceptual hashes — color-only differences are not enough
@@ -58,7 +59,7 @@ cargo clippy --workspace
 
 Tests across 28 CLI + core library + end-to-end:
 
-- **Matching** (104 tests) — All 4 phases individually and combined. Sequential shot filter (burst detection, boundary cases, cross-format interaction, mixed with true duplicates). Dual-hash consensus (accept/reject matrix). EXIF filtering (camera model, date presence, phash validation). Cross-format grouping (HEIC/RAW without phash, HIGH threshold). BK-tree distance thresholds. Merge safeguards (cross-group visual validation, pure subsets, bridge photos). Transitive merge chains. Full pipeline scenarios (iPhone original+export+HEIC triplets, recompressed JPEGs, renamed files, 10-photo batch, sequential shots among true duplicates).
+- **Matching** (108 tests) — All 5 phases individually and combined. Sequential shot filter (burst detection, boundary cases, cross-format interaction, mixed with true duplicates). Dual-hash consensus (accept/reject matrix). EXIF filtering (camera model, date presence, phash validation). Cross-format grouping (HEIC/RAW without phash, HIGH threshold). BK-tree distance thresholds. Merge safeguards (cross-group visual validation, pure subsets, bridge photos). Transitive merge chains. Phase 5 EXIF sweep (orphaned HEIC/RAW attachment, no-EXIF stays ungrouped, no-matching-group stays ungrouped, multiple orphans attached). Full pipeline scenarios (iPhone original+export+HEIC triplets, recompressed JPEGs, renamed files, 10-photo batch, sequential shots among true duplicates).
 - **CLI dashboard** (28 tests) — format_size, source_display_name, StatusData, is_duplicate, vault_eligible, compute_aggregates, compute_source_stats, sort_photos_for_display
 - **Catalog** (39 tests) — CRUD operations, format/confidence roundtrip, mtime tracking, config persistence, source removal, perceptual hash invalidation, schema versioning, schema structure pinning, data integrity (FK enforcement, reopen persistence)
 - **Vault sync** (20 tests) — Date parsing, EXIF/mtime fallback, photo selection, content-addressable paths, incremental copy, manifest tests

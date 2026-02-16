@@ -180,7 +180,13 @@ pub fn find_duplicates(photos: &[PhotoFile]) -> Vec<MatchGroup> {
     }
 
     // Phase 4: Merge overlapping groups (with cross-group visual validation)
-    merge_overlapping(&mut groups, photos)
+    let mut merged = merge_overlapping(&mut groups, photos);
+
+    // Phase 5: Attach orphaned non-phash photos to groups by EXIF match
+    let final_grouped: HashSet<i64> = merged.iter().flat_map(|g| &g.member_ids).copied().collect();
+    attach_orphaned_by_exif(&mut merged, photos, &final_grouped);
+
+    merged
 }
 
 /// Phase 1: Group photos by identical SHA-256 hash.
@@ -192,6 +198,17 @@ fn group_by_sha256(photos: &[PhotoFile]) -> HashMap<String, Vec<&PhotoFile>> {
     map
 }
 
+/// Build an EXIF key (date + camera model) for grouping.
+fn exif_key(photo: &PhotoFile) -> Option<String> {
+    let exif = photo.exif.as_ref()?;
+    let date = exif.date.as_ref()?;
+    Some(format!(
+        "{}|{}",
+        date,
+        exif.camera_model.as_deref().unwrap_or("unknown")
+    ))
+}
+
 /// Phase 2: Group photos by EXIF date + camera, producing clusters of potential duplicates.
 fn group_by_exif(photos: &[PhotoFile], excluded: &HashSet<i64>) -> Vec<MatchGroup> {
     let mut date_camera_map: HashMap<String, Vec<i64>> = HashMap::new();
@@ -201,15 +218,8 @@ fn group_by_exif(photos: &[PhotoFile], excluded: &HashSet<i64>) -> Vec<MatchGrou
             continue;
         }
 
-        if let Some(ref exif) = photo.exif {
-            if let Some(ref date) = exif.date {
-                let key = format!(
-                    "{}|{}",
-                    date,
-                    exif.camera_model.as_deref().unwrap_or("unknown")
-                );
-                date_camera_map.entry(key).or_default().push(photo.id);
-            }
+        if let Some(key) = exif_key(photo) {
+            date_camera_map.entry(key).or_default().push(photo.id);
         }
     }
 
@@ -522,6 +532,43 @@ fn cross_group_validated(
     }
 
     false
+}
+
+/// Phase 5: Attach ungrouped non-phash photos to existing groups by EXIF match.
+///
+/// Non-hashable formats (HEIC, RAW) may be left ungrouped when Phase 2's strict
+/// dual-hash validation removes all hashable members from an EXIF group, leaving
+/// the non-hashable photo as a singleton (discarded). This step catches those
+/// orphans by checking if any grouped photo shares their EXIF key.
+fn attach_orphaned_by_exif(
+    groups: &mut [MatchGroup],
+    photos: &[PhotoFile],
+    grouped_ids: &HashSet<i64>,
+) {
+    // Build: EXIF key → first group index containing a photo with that key
+    let photo_map: HashMap<i64, &PhotoFile> = photos.iter().map(|p| (p.id, p)).collect();
+    let mut exif_to_group: HashMap<String, usize> = HashMap::new();
+    for (idx, group) in groups.iter().enumerate() {
+        for &id in &group.member_ids {
+            if let Some(photo) = photo_map.get(&id) {
+                if let Some(key) = exif_key(photo) {
+                    exif_to_group.entry(key).or_insert(idx);
+                }
+            }
+        }
+    }
+
+    // Find orphaned non-phash photos and attach them
+    for photo in photos {
+        if grouped_ids.contains(&photo.id) || photo.phash.is_some() {
+            continue;
+        }
+        if let Some(key) = exif_key(photo) {
+            if let Some(&group_idx) = exif_to_group.get(&key) {
+                groups[group_idx].member_ids.push(photo.id);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2088,5 +2135,119 @@ mod tests {
 
         let groups = find_duplicates(&photos);
         assert_eq!(groups.len(), 2, "Visually unrelated SHA groups must stay separate");
+    }
+
+    // ── Phase 5: Attach orphaned non-phash photos by EXIF ──────────
+
+    #[test]
+    fn test_heic_without_phash_attached_by_exif_to_phase3_group() {
+        // Reproduction of the IMG_1258.heic bug:
+        // 2 JPEGs with close phash (dist 1) but marginal dhash (dist 3),
+        // plus HEIC with no phash and same EXIF.
+        // Phase 2: EXIF groups all 3, but validation fails (dhash_dist=3 > NEAR_CERTAIN=2).
+        //   JPEGs removed (have phash, not validated, have comparison partner).
+        //   HEIC kept (no phash) but singleton → discarded.
+        // Phase 3: groups JPEGs at Probable (phash_dist=1, dhash_dist=3).
+        // Phase 5: attaches HEIC to the Phase 3 group via matching EXIF key.
+        let date = "2024-12-24 15:08:18";
+        let camera = "iPhone 16 Pro Max";
+
+        let jpeg1 = {
+            let mut p = make_photo_with_exif(1, "sha_j1", Some(0b1111_0000), date, camera);
+            p.dhash = Some(0b1010_0000);
+            p
+        };
+        let jpeg2 = {
+            let mut p = make_photo_with_exif(2, "sha_j2", Some(0b1111_0001), date, camera);
+            // dhash distance 3 from jpeg1 (bits 0,1,2 differ)
+            p.dhash = Some(0b1010_0111);
+            p
+        };
+        let heic = {
+            let mut p = make_photo_with_exif(3, "sha_heic", None, date, camera);
+            p.dhash = None;
+            p.format = PhotoFormat::Heic;
+            p
+        };
+
+        let photos = vec![jpeg1, jpeg2, heic];
+        let groups = find_duplicates(&photos);
+
+        assert_eq!(groups.len(), 1, "All 3 photos should be in one group");
+        let ids: HashSet<i64> = groups[0].member_ids.iter().copied().collect();
+        assert!(ids.contains(&1), "JPEG1 should be in group");
+        assert!(ids.contains(&2), "JPEG2 should be in group");
+        assert!(ids.contains(&3), "HEIC should be attached by Phase 5");
+    }
+
+    #[test]
+    fn test_orphaned_heic_no_exif_stays_ungrouped() {
+        // HEIC without EXIF data should remain ungrouped
+        let jpeg1 = make_photo_with_exif(1, "sha_j1", Some(0b1111_0000), "2024-12-24 15:08:18", "iPhone 16");
+        let jpeg2 = make_photo_with_exif(2, "sha_j2", Some(0b1111_0001), "2024-12-24 15:08:18", "iPhone 16");
+        let heic = {
+            let mut p = make_photo(3, "sha_heic", None);
+            p.dhash = None;
+            p.format = PhotoFormat::Heic;
+            // No EXIF at all
+            p
+        };
+
+        let photos = vec![jpeg1, jpeg2, heic];
+        let groups = find_duplicates(&photos);
+
+        assert_eq!(groups.len(), 1, "Only one group from JPEGs");
+        let ids: HashSet<i64> = groups[0].member_ids.iter().copied().collect();
+        assert!(!ids.contains(&3), "HEIC without EXIF should NOT be attached");
+    }
+
+    #[test]
+    fn test_orphaned_heic_no_matching_group_stays_ungrouped() {
+        // HEIC with EXIF but no grouped photo shares the key
+        let jpeg1 = make_photo_with_exif(1, "sha_j1", Some(0b1111_0000), "2024-12-24 15:08:18", "iPhone 16");
+        let jpeg2 = make_photo_with_exif(2, "sha_j2", Some(0b1111_0001), "2024-12-24 15:08:18", "iPhone 16");
+        let heic = {
+            let mut p = make_photo_with_exif(3, "sha_heic", None, "2025-01-01 10:00:00", "Canon R5");
+            p.dhash = None;
+            p.format = PhotoFormat::Heic;
+            p
+        };
+
+        let photos = vec![jpeg1, jpeg2, heic];
+        let groups = find_duplicates(&photos);
+
+        assert_eq!(groups.len(), 1, "Only one group from JPEGs");
+        let ids: HashSet<i64> = groups[0].member_ids.iter().copied().collect();
+        assert!(!ids.contains(&3), "HEIC with different EXIF should NOT be attached");
+    }
+
+    #[test]
+    fn test_multiple_orphaned_heic_attached_to_same_group() {
+        // Two HEICs with same EXIF should both be attached to the same group
+        let date = "2024-12-24 15:08:18";
+        let camera = "iPhone 16 Pro Max";
+
+        let jpeg1 = make_photo_with_exif(1, "sha_j1", Some(0b1111_0000), date, camera);
+        let jpeg2 = make_photo_with_exif(2, "sha_j2", Some(0b1111_0001), date, camera);
+        let heic1 = {
+            let mut p = make_photo_with_exif(3, "sha_heic1", None, date, camera);
+            p.dhash = None;
+            p.format = PhotoFormat::Heic;
+            p
+        };
+        let heic2 = {
+            let mut p = make_photo_with_exif(4, "sha_heic2", None, date, camera);
+            p.dhash = None;
+            p.format = PhotoFormat::Heic;
+            p
+        };
+
+        let photos = vec![jpeg1, jpeg2, heic1, heic2];
+        let groups = find_duplicates(&photos);
+
+        assert_eq!(groups.len(), 1, "All 4 photos should be in one group");
+        let ids: HashSet<i64> = groups[0].member_ids.iter().copied().collect();
+        assert!(ids.contains(&3), "First HEIC should be attached");
+        assert!(ids.contains(&4), "Second HEIC should be attached");
     }
 }
